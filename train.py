@@ -6,6 +6,8 @@
 
 from fairseq_cli.train import cli_main
 
+# import multiprocessing
+# multiprocessing.set_start_method('spawn', True)
 
 if __name__ == '__main__':
     cli_main()

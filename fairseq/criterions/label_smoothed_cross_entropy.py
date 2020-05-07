@@ -9,11 +9,14 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None):
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+    if mask is not None:
+        nll_loss.masked_fill_((1 - mask).bool(), 0.)
+        smooth_loss.masked_fill_((1 - mask).bool(), 0.)
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.)
@@ -69,8 +72,10 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         lprobs = model.get_normalized_probs(net_output, log_probs=True)
         lprobs = lprobs.view(-1, lprobs.size(-1))
         target = model.get_targets(sample, net_output).view(-1, 1)
+        mask = sample['mask'].view(-1, 1)
+        assert target.size() == mask.size(), "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
         loss, nll_loss = label_smoothed_nll_loss(
-            lprobs, target, self.eps, ignore_index=self.padding_idx, reduce=reduce,
+            lprobs, target, self.eps, ignore_index=self.padding_idx, reduce=reduce, mask=mask
         )
         return loss, nll_loss
 

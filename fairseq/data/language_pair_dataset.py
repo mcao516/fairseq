@@ -5,6 +5,7 @@
 
 import logging
 
+from os import path
 import numpy as np
 import torch
 
@@ -77,6 +78,13 @@ def collate(
     else:
         ntokens = sum(len(s['source']) for s in samples)
 
+    mask = None
+    if samples[0].get('mask', None) is not None:
+        mask = merge('mask', left_pad=left_pad_target)
+        mask = mask.index_select(0, sort_order)
+        tgt_lengths = torch.LongTensor([s['mask'].numel() for s in samples]).index_select(0, sort_order)
+        ntokens = sum(len(s['mask']) for s in samples)
+
     batch = {
         'id': id,
         'nsentences': len(samples),
@@ -89,6 +97,8 @@ def collate(
     }
     if prev_output_tokens is not None:
         batch['net_input']['prev_output_tokens'] = prev_output_tokens
+    if mask is not None:
+        batch['mask'] = mask
 
     if samples[0].get('alignment', None) is not None:
         bsz, tgt_sz = batch['target'].shape
@@ -150,6 +160,18 @@ class LanguagePairDataset(FairseqDataset):
         append_bos (bool, optional): if set, appends bos to the beginning of
             source/target sentence.
     """
+    @staticmethod
+    def read_mask(mask_path):
+        assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
+        mask = []
+        with open(mask_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                mask.append(torch.tensor([int(i) for i in line.split()], dtype=torch.long))
+        return mask
+
+    # define class variable
+    mask = read_mask.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/train.mask")
 
     def __init__(
         self, src, src_sizes, src_dict,
@@ -216,6 +238,12 @@ class LanguagePairDataset(FairseqDataset):
             'source': src_item,
             'target': tgt_item,
         }
+        if len(self.tgt) == len(self.mask) and self.mask is not None and len(self.mask) > 0:
+            mask_item = self.mask[index]
+            assert tgt_item.size() == mask_item.size(), "Mask size: {}; Target size: {}".format(mask_item.size(), 
+                                                                                                tgt_item.size())
+            example['mask'] = mask_item
+
         if self.align_dataset is not None:
             example['alignment'] = self.align_dataset[index]
         return example
