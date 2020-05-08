@@ -163,6 +163,7 @@ class LanguagePairDataset(FairseqDataset):
     @staticmethod
     def read_mask(mask_path):
         assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
+        logger.warning("Entity masking is applied!")
         mask = []
         with open(mask_path, 'r') as f:
             for line in f:
