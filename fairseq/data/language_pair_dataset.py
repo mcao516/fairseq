@@ -239,7 +239,7 @@ class LanguagePairDataset(FairseqDataset):
             'source': src_item,
             'target': tgt_item,
         }
-        if len(self.tgt) == len(self.mask) and self.mask is not None and len(self.mask) > 0:
+        if self.tgt is not None and self.mask is not None and len(self.tgt) == len(self.mask):
             mask_item = self.mask[index]
             assert tgt_item.size() == mask_item.size(), "Mask size: {}; Target size: {}".format(mask_item.size(), 
                                                                                                 tgt_item.size())
