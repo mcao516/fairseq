@@ -97,8 +97,8 @@ def load_langpair_dataset(
             tgt_dataset.append(input_ids)
             tgt_sizes.append(input_ids.size(0))
 
-    src_base = BaseDataset(src_dataset, src_sizes)
-    tgt_base = BaseDataset(tgt_dataset, tgt_sizes)
+    src_base = BaseDataset(src_dataset, np.array(src_sizes))
+    tgt_base = BaseDataset(tgt_dataset, np.array(tgt_sizes))
 
     return LanguagePairDataset(
         src_base, src_base.sizes, src_dict,

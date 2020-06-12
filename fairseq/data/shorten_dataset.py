@@ -16,18 +16,23 @@ class BaseDataset(BaseWrapperDataset):
     def __init__(self, dataset, sizes):
         super().__init__(dataset)
         self.dataset = dataset
-        self.sizes = np.array(sizes)
+        self._sizes = sizes
 
     def __getitem__(self, index):
-        item = self.dataset[index]
-        return item
-
-    @property
-    def sizes(self):
-        return self.sizes
+        return self.dataset[index]
 
     def __len__(self):
         return len(self.dataset)
+
+    def num_tokens(self, index):
+        return self.sizes[index]
+
+    def size(self, index):
+        return self.sizes[index]
+
+    @property
+    def sizes(self):
+        return self._sizes
 
 
 class TruncateDataset(BaseWrapperDataset):
