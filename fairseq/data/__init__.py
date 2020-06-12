@@ -44,7 +44,7 @@ from .subsample_dataset import SubsampleDataset
 from .token_block_dataset import TokenBlockDataset
 from .transform_eos_dataset import TransformEosDataset
 from .transform_eos_lang_pair_dataset import TransformEosLangPairDataset
-from .shorten_dataset import TruncateDataset, RandomCropDataset
+from .shorten_dataset import TruncateDataset, RandomCropDataset, BaseDataset
 
 from .iterators import (
     CountingIterator,
@@ -104,4 +104,5 @@ __all__ = [
     'TransformEosLangPairDataset',
     'TruncateDataset',
     'TruncatedDictionary',
+    'BaseDataset',
 ]
