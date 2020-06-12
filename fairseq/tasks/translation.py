@@ -22,6 +22,7 @@ from fairseq.data import (
     PrependTokenDataset,
     StripTokenDataset,
     TruncateDataset,
+    BaseDataset,
 )
 
 from fairseq.tasks import FairseqTask, register_task
@@ -96,9 +97,12 @@ def load_langpair_dataset(
             tgt_dataset.append(input_ids)
             tgt_sizes.append(input_ids.size(0))
 
+    src_base = BaseDataset(src_dataset, src_sizes)
+    tgt_base = BaseDataset(tgt_dataset, tgt_sizes)
+
     return LanguagePairDataset(
-        src_dataset, np.array(src_sizes), src_dict,
-        tgt_dataset, np.array(tgt_sizes), tgt_dict,
+        src_base, src_base.sizes, src_dict,
+        tgt_base, tgt_base.sizes, tgt_dict,
         left_pad_source=left_pad_source,
         left_pad_target=left_pad_target,
         max_source_positions=max_source_positions,

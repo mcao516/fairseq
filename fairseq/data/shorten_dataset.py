@@ -9,6 +9,27 @@ from fairseq.data import data_utils
 from . import BaseWrapperDataset
 
 
+class BaseDataset(BaseWrapperDataset):
+    """Basic dataset.
+    """
+
+    def __init__(self, dataset, sizes):
+        super().__init__(dataset)
+        self.dataset = dataset
+        self.sizes = np.array(sizes)
+
+    def __getitem__(self, index):
+        item = self.dataset[index]
+        return item
+
+    @property
+    def sizes(self):
+        return self.sizes
+
+    def __len__(self):
+        return len(self.dataset)
+
+
 class TruncateDataset(BaseWrapperDataset):
     """Truncate a sequence by returning the first truncation_length tokens
     """
