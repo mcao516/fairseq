@@ -73,7 +73,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 'sentence_loss': nll_loss.detach(),
             }
 
-            path = '/home/mila/c/caomeng/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
+            path = '/home/mcao610/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
             torch.save(data_to_save, path)
         
         # ==================================================================================================
