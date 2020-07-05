@@ -4,6 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
+import torch
+import pickle
+
+from datetime import datetime
 
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
@@ -55,6 +59,25 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         """
         net_output = model(**sample['net_input'])
         loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
+
+        # ==================================================================================================
+
+        i = sample['id'].tolist()[0]
+        if i < 100 and model.training:
+            with torch.no_grad():
+                _, nll_token_loss = self.compute_loss(model, net_output, sample, reduce=False)
+
+            data_to_save = {
+                'sample': sample,
+                'token_loss': nll_token_loss.detach(),
+                'sentence_loss': nll_loss.detach(),
+            }
+
+            path = '/home/mila/c/caomeng/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
+            torch.save(data_to_save, path)
+        
+        # ==================================================================================================
+
         sample_size = sample['target'].size(0) if self.sentence_avg else sample['ntokens']
         logging_output = {
             'loss': loss.data,
