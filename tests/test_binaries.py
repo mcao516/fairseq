@@ -112,6 +112,7 @@ class TestTranslation(unittest.TestCase):
                         '--match-source-len',
                     ])
                 generate_main(data_dir, ['--prefix-size', '2'])
+                generate_main(data_dir, ['--retain-dropout'])
 
     def test_eval_bleu(self):
         with contextlib.redirect_stdout(StringIO()):
@@ -199,6 +200,48 @@ class TestTranslation(unittest.TestCase):
                             data_dir,
                             extra_flags=[
                                 '--task', 'multilingual_translation',
+                                '--lang-pairs', 'in-out,out-in',
+                                '--source-lang', 'in',
+                                '--target-lang', 'out',
+                            ] + enc_ltok_flag + dec_ltok_flag,
+                        )
+
+    def test_translation_multi_simple_epoch(self):
+        # test with all combinations of encoder/decoder lang tokens
+        encoder_langtok_flags = [[], ['--encoder-langtok', 'src'], ['--encoder-langtok', 'tgt']]
+        decoder_langtok_flags = [[], ['--decoder-langtok']]
+        with contextlib.redirect_stdout(StringIO()):
+            for i in range(len(encoder_langtok_flags)):
+                for j in range(len(decoder_langtok_flags)):
+                    enc_ltok_flag = encoder_langtok_flags[i]
+                    dec_ltok_flag = decoder_langtok_flags[j]
+                    with tempfile.TemporaryDirectory(f'test_translation_multi_simple_epoch_{i}_{j}') as data_dir:
+                        create_dummy_data(data_dir)
+                        preprocess_translation_data(
+                            data_dir,
+                            extra_flags=['--joined-dictionary']
+                        )
+                        train_translation_model(
+                            data_dir,
+                            arch='transformer',
+                            task='translation_multi_simple_epoch',
+                            extra_flags=[
+                                '--encoder-layers', '2',
+                                '--decoder-layers', '2',
+                                '--encoder-embed-dim', '8',
+                                '--decoder-embed-dim', '8',
+                                '--sampling-method', 'temperature',
+                                '--sampling-temperature', '1.5',
+                                '--virtual-epoch-size', '1000',
+                            ] + enc_ltok_flag + dec_ltok_flag,
+                            lang_flags=['--lang-pairs', 'in-out,out-in'],
+                            run_validation=True,
+                            extra_valid_flags=enc_ltok_flag + dec_ltok_flag,
+                        )
+                        generate_main(
+                            data_dir,
+                            extra_flags=[
+                                '--task', 'translation_multi_simple_epoch',
                                 '--lang-pairs', 'in-out,out-in',
                                 '--source-lang', 'in',
                                 '--target-lang', 'out',

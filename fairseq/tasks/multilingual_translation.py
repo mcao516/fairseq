@@ -6,11 +6,11 @@
 from collections import OrderedDict
 import logging
 import os
-
+from fairseq import options
 import contextlib
 import torch
 
-from fairseq import metrics, options
+from fairseq import metrics, utils
 from fairseq.data import (
     Dictionary,
     LanguagePairDataset,
@@ -20,8 +20,7 @@ from fairseq.data import (
 from fairseq.models import FairseqMultiModel
 from fairseq.tasks.translation import load_langpair_dataset
 
-from . import FairseqTask, register_task
-from fairseq import utils
+from . import register_task, LegacyFairseqTask
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ def _lang_token_index(dic: Dictionary, lang: str):
 
 
 @register_task('multilingual_translation')
-class MultilingualTranslationTask(FairseqTask):
+class MultilingualTranslationTask(LegacyFairseqTask):
     """A task for training multiple translation models simultaneously.
 
     We iterate round-robin over batches from multiple language pairs, ordered
@@ -120,8 +119,8 @@ class MultilingualTranslationTask(FairseqTask):
 
     @classmethod
     def prepare(cls, args, **kargs):
-        args.left_pad_source = options.eval_bool(args.left_pad_source)
-        args.left_pad_target = options.eval_bool(args.left_pad_target)
+        args.left_pad_source = utils.eval_bool(args.left_pad_source)
+        args.left_pad_target = utils.eval_bool(args.left_pad_target)
 
         if args.lang_pairs is None:
             raise ValueError('--lang-pairs is required. List all the language pairs in the training objective.')
@@ -138,7 +137,7 @@ class MultilingualTranslationTask(FairseqTask):
         for lang in sorted_langs:
             paths = utils.split_paths(args.data)
             assert len(paths) > 0
-            dicts[lang] = Dictionary.load(os.path.join(paths[0], 'dict.{}.txt'.format(lang)))
+            dicts[lang] = cls.load_dictionary(os.path.join(paths[0], 'dict.{}.txt'.format(lang)))
             if len(dicts) > 0:
                 assert dicts[lang].pad() == dicts[sorted_langs[0]].pad()
                 assert dicts[lang].eos() == dicts[sorted_langs[0]].eos()
@@ -221,7 +220,10 @@ class MultilingualTranslationTask(FairseqTask):
             eval_key=None if self.training else "%s-%s" % (self.args.source_lang, self.args.target_lang),
         )
 
-    def build_dataset_for_inference(self, src_tokens, src_lengths):
+    def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
+        if constraints is not None:
+            raise NotImplementedError("Constrained decoding with the multilingual_translation task is not supported")
+
         lang_pair = "%s-%s" % (self.args.source_lang, self.args.target_lang)
         return RoundRobinZipDatasets(
             OrderedDict([(
@@ -312,14 +314,18 @@ class MultilingualTranslationTask(FairseqTask):
                     agg_logging_output[f"{lang_pair}:{k}"] += logging_output[k]
         return agg_loss, agg_sample_size, agg_logging_output
 
-    def inference_step(self, generator, models, sample, prefix_tokens=None):
+    def inference_step(self, generator, models, sample, prefix_tokens=None, constraints=None):
         with torch.no_grad():
+            if self.args.decoder_langtok:
+                bos_token = _lang_token_index(self.target_dictionary, self.args.target_lang)
+            else:
+                bos_token = self.target_dictionary.eos()
             return generator.generate(
-                    models,
-                    sample,
-                    prefix_tokens=prefix_tokens,
-                    bos_token=_lang_token_index(self.target_dictionary, self.args.target_lang)
-                    if self.args.decoder_langtok else self.target_dictionary.eos(),
+                models,
+                sample,
+                prefix_tokens=prefix_tokens,
+                constraints=constraints,
+                bos_token=bos_token,
             )
 
     def reduce_metrics(self, logging_outputs, criterion):

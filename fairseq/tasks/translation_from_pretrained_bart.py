@@ -6,6 +6,7 @@
 import torch
 
 from fairseq.data import LanguagePairDataset
+from fairseq import utils
 
 from .translation import load_langpair_dataset, TranslationTask
 from . import register_task
@@ -63,7 +64,7 @@ class TranslationFromPretrainedBARTTask(TranslationTask):
         Args:
             split (str): name of the split (e.g., train, valid, test)
         """
-        paths = self.args.data.split(':')
+        paths = utils.split_paths(self.args.data)
         assert len(paths) > 0
         data_path = paths[(epoch - 1) % len(paths)]
 
@@ -108,11 +109,13 @@ class TranslationFromPretrainedBARTTask(TranslationTask):
                 eos=self.tgt_dict.index('[{}]'.format(self.args.target_lang))
             )
 
-    def build_dataset_for_inference(self, src_tokens, src_lengths):
+    def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
         src_lang_id = self.source_dictionary.index('[{}]'.format(self.args.source_lang))
         source_tokens = []
         for s_t in src_tokens:
             s_t = torch.cat([s_t, s_t.new(1).fill_(src_lang_id)])
             source_tokens.append(s_t)
-        dataset = LanguagePairDataset(source_tokens, src_lengths, self.source_dictionary)
+        dataset = LanguagePairDataset(source_tokens, src_lengths, self.source_dictionary,
+                                      tgt_dict=self.target_dictionary,
+                                      constraints=constraints)
         return dataset

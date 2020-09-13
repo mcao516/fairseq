@@ -20,6 +20,7 @@ from fairseq.models import (
     FairseqIncrementalDecoder,
 )
 from fairseq.models.fairseq_encoder import EncoderOut
+from fairseq.tasks import LegacyFairseqTask
 from fairseq.tasks import FairseqTask
 from fairseq_cli import (
     generate,
@@ -210,6 +211,7 @@ def train_translation_model(data_dir, arch, extra_flags=None, task='translation'
             data_dir,
             '--save-dir', data_dir,
             '--arch', arch,
+            '--optimizer', 'nag',
             '--lr', '0.05',
             '--max-tokens', '500',
             '--max-epoch', '1',
@@ -283,7 +285,7 @@ class TestDataset(torch.utils.data.Dataset):
         return len(self.data)
 
 
-class TestTranslationTask(FairseqTask):
+class TestTranslationTask(LegacyFairseqTask):
 
     def __init__(self, args, src_dict, tgt_dict, model):
         super().__init__(args)

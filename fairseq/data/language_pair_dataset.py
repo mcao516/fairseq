@@ -21,14 +21,16 @@ def collate(
     left_pad_source=True,
     left_pad_target=False,
     input_feeding=True,
+    pad_to_length=None,
 ):
     if len(samples) == 0:
         return {}
 
-    def merge(key, left_pad, move_eos_to_beginning=False):
+    def merge(key, left_pad, move_eos_to_beginning=False, pad_to_length=None):
         return data_utils.collate_tokens(
             [s[key] for s in samples],
             pad_idx, eos_idx, left_pad, move_eos_to_beginning,
+            pad_to_length=pad_to_length,
         )
 
     def check_alignment(alignment, src_len, tgt_len):
@@ -54,7 +56,10 @@ def collate(
         return 1. / align_weights.float()
 
     id = torch.LongTensor([s['id'] for s in samples])
-    src_tokens = merge('source', left_pad=left_pad_source)
+    src_tokens = merge(
+        'source', left_pad=left_pad_source,
+        pad_to_length=pad_to_length['source'] if pad_to_length is not None else None
+    )
     # sort by descending source length
     src_lengths = torch.LongTensor([
         s['source'].ne(pad_idx).long().sum() for s in samples
@@ -66,22 +71,27 @@ def collate(
     prev_output_tokens = None
     target = None
     if samples[0].get('target', None) is not None:
-        target = merge('target', left_pad=left_pad_target)
+        target = merge(
+            'target', left_pad=left_pad_target,
+            pad_to_length=pad_to_length['target'] if pad_to_length is not None else None,
+        )
         target = target.index_select(0, sort_order)
         tgt_lengths = torch.LongTensor([
             s['target'].ne(pad_idx).long().sum() for s in samples
         ]).index_select(0, sort_order)
         ntokens = tgt_lengths.sum().item()
 
-        if input_feeding:
+        if samples[0].get('prev_output_tokens', None) is not None:
+            prev_output_tokens = merge('prev_output_tokens', left_pad=left_pad_target)
+        elif input_feeding:
             # we create a shifted version of targets for feeding the
             # previous output token(s) into the next decoder step
             prev_output_tokens = merge(
                 'target',
                 left_pad=left_pad_target,
                 move_eos_to_beginning=True,
+                pad_to_length=pad_to_length['target'] if pad_to_length is not None else None,
             )
-            prev_output_tokens = prev_output_tokens.index_select(0, sort_order)
     else:
         ntokens = src_lengths.sum().item()
 
@@ -96,7 +106,7 @@ def collate(
         'target': target,
     }
     if prev_output_tokens is not None:
-        batch['net_input']['prev_output_tokens'] = prev_output_tokens
+        batch['net_input']['prev_output_tokens'] = prev_output_tokens.index_select(0, sort_order)
 
     if samples[0].get('alignment', None) is not None:
         bsz, tgt_sz = batch['target'].shape
@@ -122,6 +132,16 @@ def collate(
 
             batch['alignments'] = alignments
             batch['align_weights'] = align_weights
+
+    if samples[0].get("constraints", None) is not None:
+        # Collate the packed constraints across the samples, padding to
+        # the length of the longest sample.
+        lens = [sample.get("constraints").size(0) for sample in samples]
+        max_len = max(lens)
+        constraints = torch.zeros((len(samples), max(lens))).long()
+        for i, sample in enumerate(samples):
+            constraints[i, 0:lens[i]] = samples[i].get("constraints")
+        batch["constraints"] = constraints
 
     return batch
 
@@ -151,10 +171,18 @@ class LanguagePairDataset(FairseqDataset):
             target if it's absent (default: False).
         align_dataset (torch.utils.data.Dataset, optional): dataset
             containing alignments.
+        constraints (Tensor, optional): 2d tensor with a concatenated, zero-
+            delimited list of constraints for each sentence.
         append_bos (bool, optional): if set, appends bos to the beginning of
             source/target sentence.
         num_buckets (int, optional): if set to a value greater than 0, then
             batches will be bucketed into the given number of batch shapes.
+        src_lang_id (int, optional): source language ID, if set, the collated batch
+            will contain a field 'src_lang_id' in 'net_input' which indicates the
+            source language of the samples.
+        tgt_lang_id (int, optional): target language ID, if set, the collated batch
+            will contain a field 'tgt_lang_id' which indicates the target language
+             of the samples.
     """
 
     def __init__(
@@ -164,8 +192,11 @@ class LanguagePairDataset(FairseqDataset):
         shuffle=True, input_feeding=True,
         remove_eos_from_source=False, append_eos_to_target=False,
         align_dataset=None,
+        constraints=None,
         append_bos=False, eos=None,
         num_buckets=0,
+        src_lang_id=None,
+        tgt_lang_id=None,
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -188,9 +219,11 @@ class LanguagePairDataset(FairseqDataset):
         self.align_dataset = align_dataset
         if self.align_dataset is not None:
             assert self.tgt_sizes is not None, "Both source and target needed when alignments are provided"
+        self.constraints = constraints
         self.append_bos = append_bos
         self.eos = (eos if eos is not None else src_dict.eos())
-
+        self.src_lang_id = src_lang_id
+        self.tgt_lang_id = tgt_lang_id
         if num_buckets > 0:
             from fairseq.data import BucketPadLengthDataset
             self.src = BucketPadLengthDataset(
@@ -245,7 +278,7 @@ class LanguagePairDataset(FairseqDataset):
                 tgt_item = torch.cat([torch.LongTensor([bos]), self.tgt[index]])
 
             bos = self.src_dict.bos()
-            if self.src[index][-1] != bos:
+            if self.src[index][0] != bos:
                 src_item = torch.cat([torch.LongTensor([bos]), self.src[index]])
 
         if self.remove_eos_from_source:
@@ -260,16 +293,21 @@ class LanguagePairDataset(FairseqDataset):
         }
         if self.align_dataset is not None:
             example['alignment'] = self.align_dataset[index]
+        if self.constraints is not None:
+            example["constraints"] = self.constraints[index]
         return example
 
     def __len__(self):
         return len(self.src)
 
-    def collater(self, samples):
+    def collater(self, samples, pad_to_length=None):
         """Merge a list of samples to form a mini-batch.
 
         Args:
             samples (List[dict]): samples to collate
+            pad_to_length (dict, optional): a dictionary of
+                {'source': source_pad_to_length, 'target': target_pad_to_length}
+                to indicate the max length to pad to in source and target respectively.
 
         Returns:
             dict: a mini-batch with the following keys:
@@ -289,19 +327,36 @@ class LanguagePairDataset(FairseqDataset):
                     This key will not be present if *input_feeding* is
                     ``False``.  Padding will appear on the left if
                     *left_pad_target* is ``True``.
+                  - `src_lang_id` (LongTensor): a long Tensor which contains source
+                    language IDs of each sample in the batch
 
                 - `target` (LongTensor): a padded 2D Tensor of tokens in the
                   target sentence of shape `(bsz, tgt_len)`. Padding will appear
                   on the left if *left_pad_target* is ``True``.
+                - `tgt_lang_id` (LongTensor): a long Tensor which contains target language
+                   IDs of each sample in the batch
         """
-        return collate(
+        res = collate(
             samples,
             pad_idx=self.src_dict.pad(),
             eos_idx=self.eos,
             left_pad_source=self.left_pad_source,
             left_pad_target=self.left_pad_target,
             input_feeding=self.input_feeding,
+            pad_to_length=pad_to_length,
         )
+        if self.src_lang_id is not None or self.tgt_lang_id is not None:
+            src_tokens = res['net_input']['src_tokens']
+            bsz = src_tokens.size(0)
+            if self.src_lang_id is not None:
+                res['net_input']['src_lang_id'] = torch.LongTensor(
+                            [[self.src_lang_id]]
+                            ).expand(bsz, 1).to(src_tokens)
+            if self.tgt_lang_id is not None:
+                res['tgt_lang_id'] = torch.LongTensor(
+                            [[self.tgt_lang_id]]
+                            ).expand(bsz, 1).to(src_tokens)
+        return res
 
     def num_tokens(self, index):
         """Return the number of tokens in a sample. This value is used to
@@ -317,9 +372,9 @@ class LanguagePairDataset(FairseqDataset):
         """Return an ordered list of indices. Batches will be constructed based
         on this order."""
         if self.shuffle:
-            indices = np.random.permutation(len(self))
+            indices = np.random.permutation(len(self)).astype(np.int64)
         else:
-            indices = np.arange(len(self))
+            indices = np.arange(len(self), dtype=np.int64)
         if self.buckets is None:
             # sort by target length, then source length
             if self.tgt_sizes is not None:
@@ -347,3 +402,35 @@ class LanguagePairDataset(FairseqDataset):
             self.tgt.prefetch(indices)
         if self.align_dataset is not None:
             self.align_dataset.prefetch(indices)
+
+    def filter_indices_by_size(self, indices, max_sizes):
+        """ Filter a list of sample indices. Remove those that are longer
+            than specified in max_sizes.
+
+        Args:
+            indices (np.array): original array of sample indices
+            max_sizes (int or list[int] or tuple[int]): max sample size,
+                can be defined separately for src and tgt (then list or tuple)
+
+        Returns:
+            np.array: filtered sample array
+            list: list of removed indices
+        """
+        if max_sizes is None:
+            return indices, []
+        if type(max_sizes) in (int, float):
+            max_src_size, max_tgt_size = max_sizes, max_sizes
+        else:
+            max_src_size, max_tgt_size = max_sizes
+        if self.tgt_sizes is None:
+            ignored = indices[self.src_sizes[indices] > max_src_size]
+        else:
+            ignored = indices[(self.src_sizes[indices] > max_src_size) |
+                              (self.tgt_sizes[indices] > max_tgt_size)]
+        if len(ignored) > 0:
+            if self.tgt_sizes is None:
+                indices = indices[self.src_sizes[indices] <= max_src_size]
+            else:
+                indices = indices[(self.src_sizes[indices] <= max_src_size) &
+                                  (self.tgt_sizes[indices] <= max_tgt_size)]
+        return indices, ignored.tolist()
