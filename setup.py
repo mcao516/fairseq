@@ -138,7 +138,7 @@ setup(
         'cython',
         'numpy',
         'regex',
-#        'sacrebleu',
+        'sacrebleu',
         'torch',
         'tqdm',
     ],
