@@ -5,17 +5,17 @@
 
 import torch
 import torch.nn.functional as F
-
 from fairseq import utils
-from fairseq.modules import (
-    TransformerSentenceEncoderLayer
-)
 from fairseq.model_parallel.modules import ModelParallelMultiheadAttention
+from fairseq.modules import TransformerSentenceEncoderLayer
+
+
 try:
     from fairseq.model_parallel.megatron.mpu import (
         ColumnParallelLinear,
         RowParallelLinear,
     )
+
     has_megatron_submodule = True
 except (ImportError, ModuleNotFoundError):
     has_megatron_submodule = False
@@ -26,6 +26,7 @@ class ModelParallelTransformerSentenceEncoderLayer(TransformerSentenceEncoderLay
     Implements a Model Parallel Transformer Encoder Layer used in
     BERT/XLM style pre-trained models.
     """
+
     def build_fc1(self, input_dim, output_dim, **unused):
         return ColumnParallelLinear(input_dim, output_dim, gather_output=False)
 
@@ -40,10 +41,7 @@ class ModelParallelTransformerSentenceEncoderLayer(TransformerSentenceEncoderLay
         **kwargs,
     ):
         return ModelParallelMultiheadAttention(
-            embed_dim,
-            num_attention_heads,
-            dropout=dropout,
-            self_attention=True
+            embed_dim, num_attention_heads, dropout=dropout, self_attention=True
         )
 
     def forward(
@@ -66,14 +64,14 @@ class ModelParallelTransformerSentenceEncoderLayer(TransformerSentenceEncoderLay
             need_weights=False,
             attn_mask=self_attn_mask,
         )
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.dropout_module(x)
         x = residual + x
 
         residual = x
         x = self.final_layer_norm(x)
         x = self.activation_fn(self.fc1(x))
-        x = F.dropout(x, p=self.activation_dropout, training=self.training)
+        x = self.activation_dropout_module(x)
         x = self.fc2(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.dropout_module(x)
         x = residual + x
         return x, None

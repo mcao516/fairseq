@@ -3,10 +3,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Dict, List, NamedTuple, Optional
+
 import torch
 import torch.nn as nn
-from typing import Dict, List, NamedTuple, Optional
 from torch import Tensor
+
 
 EncoderOut = NamedTuple(
     "EncoderOut",
@@ -55,9 +57,7 @@ class FairseqEncoder(nn.Module):
     @torch.jit.unused
     def forward_non_torchscript(self, net_input: Dict[str, Tensor]):
         encoder_input = {
-            k: v
-            for k, v in net_input.items()
-            if k != "prev_output_tokens"
+            k: v for k, v in net_input.items() if k != "prev_output_tokens"
         }
         return self.forward(**encoder_input)
 
@@ -81,3 +81,12 @@ class FairseqEncoder(nn.Module):
     def upgrade_state_dict(self, state_dict):
         """Upgrade a (possibly old) state dict for new versions of fairseq."""
         return state_dict
+
+    def set_num_updates(self, num_updates):
+        """State from trainer to pass along to model at every update."""
+
+        def _apply(m):
+            if hasattr(m, "set_num_updates") and m != self:
+                m.set_num_updates(num_updates)
+
+        self.apply(_apply)

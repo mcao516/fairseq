@@ -21,13 +21,13 @@ class Dictionary(object):
     def __init__(
         self,
         *,  # begin keyword-only arguments
+        bos="<s>",
         pad="<pad>",
         eos="</s>",
         unk="<unk>",
-        bos="<s>",
         extra_special_symbols=None,
     ):
-        self.unk_word, self.pad_word, self.eos_word = unk, pad, eos
+        self.bos_word, self.unk_word, self.pad_word, self.eos_word = bos, unk, pad, eos
         self.symbols = []
         self.count = []
         self.indices = {}
@@ -69,6 +69,7 @@ class Dictionary(object):
         escape_unk=False,
         extra_symbols_to_ignore=None,
         unk_string=None,
+        include_eos=False,
     ):
         """Helper for converting a tensor of token indices to a string.
 
@@ -76,7 +77,7 @@ class Dictionary(object):
         """
         if torch.is_tensor(tensor) and tensor.dim() == 2:
             return "\n".join(
-                self.string(t, bpe_symbol, escape_unk, extra_symbols_to_ignore)
+                self.string(t, bpe_symbol, escape_unk, extra_symbols_to_ignore, include_eos=include_eos)
                 for t in tensor
             )
 
@@ -101,7 +102,7 @@ class Dictionary(object):
             if utils.item(i) not in extra_symbols_to_ignore
         )
 
-        return data_utils.process_bpe_symbol(sent, bpe_symbol)
+        return data_utils.post_process(sent, bpe_symbol)
 
     def unk_string(self, escape=False):
         """Return unknown string, optionally escaped as: <<unk>>"""
@@ -221,7 +222,7 @@ class Dictionary(object):
         """
         if isinstance(f, str):
             try:
-                with PathManager.open(f, "r", encoding="utf-8") as fd:
+                with open(PathManager.get_local_path(f), "r", encoding="utf-8") as fd:
                     self.add_from_file(fd)
             except FileNotFoundError as fnfe:
                 raise fnfe
@@ -251,8 +252,7 @@ class Dictionary(object):
                         "Duplicate words can overwrite earlier ones by adding the "
                         "#fairseq:overwrite flag at the end of the corresponding row "
                         "in the dictionary file. If using the Camembert model, please "
-                        "download an updated copy of the model file."
-                        .format(word)
+                        "download an updated copy of the model file.".format(word)
                     )
                 self.add_symbol(word, n=count, overwrite=overwrite)
             except ValueError:
