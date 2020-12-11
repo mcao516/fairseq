@@ -118,6 +118,7 @@ def load_langpair_dataset(
         else:
             tgt_dataset = None
 
+    # =============================== NOT USED ================================ #
     if prepend_bos:
         assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
         src_dataset = PrependTokenDataset(src_dataset, src_dict.bos())
@@ -142,6 +143,17 @@ def load_langpair_dataset(
             align_dataset = data_utils.load_indexed_dataset(
                 align_path, None, dataset_impl
             )
+    # ========================================================================= #
+
+    weight_path = os.path.join(data_path, '{}_weights.npy'.format(split))
+    if os.path.exists(weight_path):
+        sample_weights = np.load(weight_path)
+        assert len(sample_weights) == len(src_dataset)
+        logger.info(
+            "{} {} {}-{} {} weights".format(
+                data_path, split_k, src, tgt, len(sample_weights)
+            )
+        )
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
@@ -158,6 +170,7 @@ def load_langpair_dataset(
         num_buckets=num_buckets,
         shuffle=shuffle,
         pad_to_multiple=pad_to_multiple,
+        sample_weights=sample_weights
     )
 
 
