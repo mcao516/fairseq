@@ -10,11 +10,27 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, weights=None):
+    """
+    Args:
+        lprobs: tensor([batch_size * max_tgt_len, vocab_size])
+        target: tensor([batch_size * max_tgt_len])
+        weights (Optional): tensor([batch_size])
+    """
     if target.dim() == lprobs.dim() - 1:
-        target = target.unsqueeze(-1)
-    nll_loss = -lprobs.gather(dim=-1, index=target)
-    smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+        target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
+    nll_loss = -lprobs.gather(dim=-1, index=target) # [batch_size * max_tgt_len, 1]
+    smooth_loss = -lprobs.sum(dim=-1, keepdim=True) # [batch_size * max_tgt_len, 1]
+
+    if weights is not None:
+        tgt_len = target.shape[0] // weights.shape[0]
+        weights = weights.unsqueeze(-1).expand(weights.shape[0], tgt_len) # [batch_size, max_tgt_len]
+        weights = weights.reshape(-1, 1) # [batch_size * max_tgt_len, 1]
+        assert weights.shape == nll_loss.shape == smooth_loss.shape
+        
+        nll_loss = weights * nll_loss
+        smooth_loss = weights * smooth_loss
+
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
@@ -23,8 +39,8 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
     if reduce:
-        nll_loss = nll_loss.sum()
-        smooth_loss = smooth_loss.sum()
+        nll_loss = nll_loss.sum() # []
+        smooth_loss = smooth_loss.sum() # []
     eps_i = epsilon / lprobs.size(-1)
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
@@ -85,8 +101,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         return loss, sample_size, logging_output
 
     def get_lprobs_and_target(self, model, net_output, sample):
-        lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        target = model.get_targets(sample, net_output)
+        lprobs = model.get_normalized_probs(net_output, log_probs=True) # log_softmax: [batch_size, max_tgt_len, vocab_size]
+        target = model.get_targets(sample, net_output) # target: [batch_size, max_tgt_len]
         if self.ignore_prefix_size > 0:
             if getattr(lprobs, "batch_first", False):
                 lprobs = lprobs[:, self.ignore_prefix_size :, :].contiguous()
@@ -97,6 +113,23 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         return lprobs.view(-1, lprobs.size(-1)), target.view(-1)
 
     def compute_loss(self, model, net_output, sample, reduce=True):
+        """
+        Args:
+            model: BARTModel
+            net_output: tensor([batch_size, max_tgt_len, vocab_size])
+            sample: {
+                'id': tensor([batch_size]),
+                'nsentences': number of samples (int), 
+                'ntokens': (int), 
+                'net_input': {
+                    'src_tokens': tensor([batch_size, max_src_len]), 
+                    'src_lengths' tensor([batch_size]), 
+                    'prev_output_tokens': tensor([batch_size, max_tgt_len]), 
+                }, 
+                'sample_weights': tensor([batch_size]), 
+                'target': tensor([batch_size, max_tgt_len])
+            }
+        """
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
@@ -104,6 +137,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             self.eps,
             ignore_index=self.padding_idx,
             reduce=reduce,
+            weights=sample['sample_weights']
         )
         return loss, nll_loss
 
