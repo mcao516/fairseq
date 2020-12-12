@@ -52,6 +52,7 @@ def load_langpair_dataset(
     num_buckets=0,
     shuffle=True,
     pad_to_multiple=1,
+    weight_path=None
 ):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
@@ -145,15 +146,18 @@ def load_langpair_dataset(
             )
     # ========================================================================= #
 
-    weight_path = os.path.join(data_path, '{}_weights.npy'.format(split))
-    if os.path.exists(weight_path):
-        sample_weights = np.load(weight_path)
-        assert len(sample_weights) == len(src_dataset)
-        logger.info(
-            "{} {} {}-{} {} weights".format(
-                data_path, split_k, src, tgt, len(sample_weights)
+    if weight_path is not None:
+        weight_path = os.path.join(weight_path, '{}_weights.npy'.format(split))
+        logger.info("{} weights load from: {}".format(split, weight_path))
+        
+        if os.path.exists(weight_path):
+            sample_weights = np.load(weight_path)
+            assert len(sample_weights) == len(src_dataset)
+            logger.info(
+                "{} {} {}-{} {} weights".format(
+                    data_path, split_k, src, tgt, len(sample_weights)
+                )
             )
-        )
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
@@ -247,6 +251,8 @@ class TranslationTask(LegacyFairseqTask):
         parser.add_argument('--eval-bleu-print-samples', action='store_true',
                             help='print sample generations during validation')
         # fmt: on
+        parser.add_argument('--weight-path', type=str, default=None,
+                            help='directory contains training and validation weights')
 
     def __init__(self, args, src_dict, tgt_dict):
         super().__init__(args)
@@ -325,6 +331,7 @@ class TranslationTask(LegacyFairseqTask):
             num_buckets=self.args.num_batch_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.args.required_seq_len_multiple,
+            weight_path=self.args.weight_path
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
