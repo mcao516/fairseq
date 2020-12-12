@@ -110,8 +110,10 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    # get weights
-    sample_weights = torch.Tensor([s["weight"] for s in samples])
+    # get weight for each sample in the training set
+    sample_weights = None
+    if 'weight' in samples:
+        sample_weights = torch.Tensor([s['weight'] for s in samples])
 
     batch = {
         "id": id,
