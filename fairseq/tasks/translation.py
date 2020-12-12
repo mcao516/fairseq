@@ -251,7 +251,7 @@ class TranslationTask(LegacyFairseqTask):
         parser.add_argument('--eval-bleu-print-samples', action='store_true',
                             help='print sample generations during validation')
         # fmt: on
-        parser.add_argument('--weight-path', type=str, default=None,
+        parser.add_argument('--weight-dir', type=str, default=None,
                             help='directory contains training and validation weights')
 
     def __init__(self, args, src_dict, tgt_dict):
@@ -331,7 +331,7 @@ class TranslationTask(LegacyFairseqTask):
             num_buckets=self.args.num_batch_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.args.required_seq_len_multiple,
-            weight_path=self.args.weight_path
+            weight_path=self.args.weight_dir
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
