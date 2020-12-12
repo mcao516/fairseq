@@ -145,7 +145,8 @@ def load_langpair_dataset(
                 align_path, None, dataset_impl
             )
     # ========================================================================= #
-
+    
+    sample_weights = None
     if weight_path is not None:
         weight_path = os.path.join(weight_path, '{}_weights.npy'.format(split))
         logger.info("{} weights load from: {}".format(split, weight_path))
