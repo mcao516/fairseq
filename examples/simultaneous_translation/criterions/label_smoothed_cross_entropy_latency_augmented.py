@@ -3,30 +3,41 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from examples.simultaneous_translation.utils.latency import LatencyTraining
 from fairseq.criterions import register_criterion
 from fairseq.criterions.label_smoothed_cross_entropy import (
-    LabelSmoothedCrossEntropyCriterion
-)
-
-from examples.simultaneous_translation.utils.latency import (
-    LatencyTraining
+    LabelSmoothedCrossEntropyCriterion,
 )
 
 
-@register_criterion('latency_augmented_label_smoothed_cross_entropy')
+@register_criterion("latency_augmented_label_smoothed_cross_entropy")
 class LatencyAugmentedLabelSmoothedCrossEntropyCriterion(
     LabelSmoothedCrossEntropyCriterion
 ):
-
-    def __init__(self, args, task):
-        super().__init__(args, task)
-        self.eps = args.label_smoothing
-        self.latency_weight_avg = args.latency_weight_avg
-        self.latency_weight_avg_type = args.latency_weight_avg_type
-        self.latency_weight_var = args.latency_weight_var
-        self.latency_weight_var_type = args.latency_weight_var_type
-        self.mass_preservation = args.mass_preservation
-        self.average_method = args.average_method
+    def __init__(
+        self,
+        task,
+        sentence_avg,
+        label_smoothing,
+        ignore_prefix_size,
+        report_accuracy,
+        latency_weight_avg,
+        latency_weight_avg_type,
+        latency_weight_var,
+        latency_weight_var_type,
+        mass_preservation,
+        average_method,
+    ):
+        super().__init__(
+            task, sentence_avg, label_smoothing, ignore_prefix_size, report_accuracy
+        )
+        self.eps = label_smoothing
+        self.latency_weight_avg = latency_weight_avg
+        self.latency_weight_avg_type = latency_weight_avg_type
+        self.latency_weight_var = latency_weight_var
+        self.latency_weight_var_type = latency_weight_var_type
+        self.mass_preservation = mass_preservation
+        self.average_method = average_method
         self.latency_train = LatencyTraining(
             self.latency_weight_avg,
             self.latency_weight_var,
@@ -40,7 +51,7 @@ class LatencyAugmentedLabelSmoothedCrossEntropyCriterion(
     def add_args(parser):
         super(
             LatencyAugmentedLabelSmoothedCrossEntropyCriterion,
-            LatencyAugmentedLabelSmoothedCrossEntropyCriterion
+            LatencyAugmentedLabelSmoothedCrossEntropyCriterion,
         ).add_args(parser)
         """Add criterion-specific arguments to the parser."""
         # fmt: off
@@ -69,7 +80,8 @@ class LatencyAugmentedLabelSmoothedCrossEntropyCriterion(
 
         # Get latency loss
         latency_loss = self.latency_train.loss(
-            attn_list, source_padding_mask, target_padding_mask)
+            attn_list, source_padding_mask, target_padding_mask
+        )
 
         loss += latency_loss
 
