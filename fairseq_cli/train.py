@@ -73,7 +73,7 @@ def main(cfg: DictConfig) -> None:
     # Build model and criterion
     model = task.build_model(cfg.model)
     criterion = task.build_criterion(cfg.criterion)
-    logger.info(model)
+    # logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))
     logger.info("model: {}".format(model.__class__.__name__))
     logger.info("criterion: {})".format(criterion.__class__.__name__))
@@ -114,11 +114,16 @@ def main(cfg: DictConfig) -> None:
 
     # Load the latest checkpoint if one is available and restore the
     # corresponding train iterator
-    extra_state, epoch_itr = checkpoint_utils.load_checkpoint(
+    _, epoch_itr = checkpoint_utils.load_checkpoint(
         cfg.checkpoint,
         trainer,
         # don't cache epoch iterators for sharded datasets
         disable_iterator_cache=task.has_sharded_data("train"),
+    )
+
+    # Load the regularizaton model
+    _ = trainer.load_regularizer_checkpoint(
+        cfg.checkpoint.regularization_file,
     )
 
     max_epoch = cfg.optimization.max_epoch or math.inf

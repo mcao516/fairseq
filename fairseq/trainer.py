@@ -14,6 +14,7 @@ import time
 from argparse import Namespace
 from itertools import chain
 from typing import Any, Dict, List
+from copy import deepcopy
 
 import torch
 from fairseq import checkpoint_utils, distributed_utils, models, optim, utils
@@ -97,6 +98,7 @@ class Trainer(object):
         self._warn_once = set()
         self._wrapped_criterion = None
         self._wrapped_model = None
+        self._wrapped_reg_model = None
 
         # TODO(myleott): support tpu
         if self.cuda and self.data_parallel_world_size > 1:
@@ -135,6 +137,7 @@ class Trainer(object):
         self._optimizer = None
         self._wrapped_criterion = None
         self._wrapped_model = None
+        self._wrapped_reg_model = None
 
     @property
     def data_parallel_world_size(self):
@@ -187,6 +190,19 @@ class Trainer(object):
             else:
                 self._wrapped_model = self._model
         return self._wrapped_model
+
+    @property
+    def reg_model(self):
+        if self._wrapped_reg_model is None:
+            if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
+                self._wrapped_reg_model = models.DistributedFairseqModel(
+                    self.cfg.distributed_training,
+                    self._reg_model,
+                    process_group=self.data_parallel_process_group,
+                )
+            else:
+                self._wrapped_reg_model = self._reg_model
+        return self._wrapped_reg_model
 
     @property
     def optimizer(self):
@@ -398,6 +414,61 @@ class Trainer(object):
                         meter.reset()
         else:
             logger.info("no existing checkpoint found {}".format(filename))
+
+        return extra_state
+
+    def load_regularizer_checkpoint(
+        self,
+        filename,
+    ):
+        """
+        Load regularization model from a checkpoint file.
+        rank = 0 will load the checkpoint, and then broadcast it to all
+        other ranks.
+        """
+        bexists = PathManager.isfile(filename)
+        if bexists:
+            load_on_all_ranks = (
+                self.cfg.checkpoint.load_checkpoint_on_all_dp_ranks
+                # TPUs don't support broadcast yet, so load checkpoints
+                # on every worker for now
+                or self.tpu
+            )
+
+            if load_on_all_ranks or self.data_parallel_rank == 0:
+                state = checkpoint_utils.load_checkpoint_to_cpu(filename)
+            else:
+                state = None
+
+            if self.data_parallel_world_size > 1 and not load_on_all_ranks:
+                state = distributed_utils.broadcast_object(
+                    state,
+                    src_rank=0,
+                    group=self.data_parallel_process_group,
+                    dist_device=self.device,
+                )
+
+            # load model parameters
+            try:
+                self._reg_model = deepcopy(self.get_model())
+                self._reg_model.load_state_dict(
+                    state["model"], strict=True, model_cfg=self.cfg.model
+                )
+
+                logger.info(
+                    "loaded regularization model checkpoint from: {}".format(
+                        filename,
+                    )
+                )
+                
+            except Exception:
+                raise Exception(
+                    "Cannot load model parameters from checkpoint {}; "
+                    "please ensure that the architectures match.".format(filename)
+                )
+            extra_state = state["extra_state"]
+        else:
+            logger.info("no existing regularization model found at: {}".format(filename))
 
         return extra_state
 
