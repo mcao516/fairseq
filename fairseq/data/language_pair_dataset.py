@@ -110,9 +110,6 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    # get weights
-    sample_weights = torch.Tensor([s["weight"] for s in samples])
-
     batch = {
         "id": id,
         "nsentences": len(samples),
@@ -121,7 +118,6 @@ def collate(
             "src_tokens": src_tokens,
             "src_lengths": src_lengths,
         },
-        "sample_weights": sample_weights,
         "target": target,
     }
     if prev_output_tokens is not None:
@@ -229,8 +225,7 @@ class LanguagePairDataset(FairseqDataset):
         num_buckets=0,
         src_lang_id=None,
         tgt_lang_id=None,
-        pad_to_multiple=1,
-        sample_weights=None
+        pad_to_multiple=1
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -240,13 +235,8 @@ class LanguagePairDataset(FairseqDataset):
             assert len(src) == len(
                 tgt
             ), "Source and target must contain the same number of examples"
-        if sample_weights is not None:
-            assert len(src) == len(
-                sample_weights
-            ), "Source and weight array must contain the same number of examples"  
         self.src = src
         self.tgt = tgt
-        self.wgh = sample_weights
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.sizes = (
@@ -314,7 +304,6 @@ class LanguagePairDataset(FairseqDataset):
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
         src_item = self.src[index]
-        wgh_item = self.wgh[index] if self.wgh is not None else None
         # Append EOS to end of tgt sentence if it does not have an EOS and remove
         # EOS from end of src sentence if it exists. This is useful when we use
         # use existing datasets for opposite directions i.e., when we want to
@@ -341,8 +330,7 @@ class LanguagePairDataset(FairseqDataset):
         example = {
             "id": index,
             "source": src_item,
-            "target": tgt_item,
-            "weight": wgh_item
+            "target": tgt_item
         }
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]

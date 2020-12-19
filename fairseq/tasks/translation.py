@@ -145,16 +145,6 @@ def load_langpair_dataset(
             )
     # ========================================================================= #
 
-    weight_path = os.path.join(data_path, '{}_weights.npy'.format(split))
-    if os.path.exists(weight_path):
-        sample_weights = np.load(weight_path)
-        assert len(sample_weights) == len(src_dataset)
-        logger.info(
-            "{} {} {}-{} {} weights".format(
-                data_path, split_k, src, tgt, len(sample_weights)
-            )
-        )
-
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
         src_dataset,
@@ -169,8 +159,7 @@ def load_langpair_dataset(
         eos=eos,
         num_buckets=num_buckets,
         shuffle=shuffle,
-        pad_to_multiple=pad_to_multiple,
-        sample_weights=sample_weights
+        pad_to_multiple=pad_to_multiple
     )
 
 
