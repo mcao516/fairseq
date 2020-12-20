@@ -7,6 +7,8 @@
 Train a network across multiple GPUs.
 """
 
+import os
+import json
 import contextlib
 import logging
 import sys
@@ -673,6 +675,28 @@ class Trainer(object):
                 total_train_time / self.data_parallel_world_size
             )
 
+        # write logs into file
+        if self.data_parallel_rank == 0:
+            if not os.path.exists(self.cfg['checkpoint']['log_dir']):
+                os.makedirs(self.cfg['checkpoint']['log_dir'])
+
+            with open(os.path.join(self.cfg['checkpoint']['log_dir'], 'logging_outputs.txt'), 'a') as wf:
+                log_size = len(logging_outputs)
+                    
+                processed_log = {}
+                for log in logging_outputs:
+                    for k, v in log.items():
+                        if k not in processed_log:
+                            processed_log[k] = 0.
+                        
+                        if type(v) == type(torch.tensor([1.])):
+                            processed_log[k] += v.item() / log_size
+                        else:
+                            processed_log[k] += v / log_size
+
+                json.dump(processed_log, wf)
+                wf.write('\n')
+        
         overflow = False
         try:
             with torch.autograd.profiler.record_function("reduce-grads"):

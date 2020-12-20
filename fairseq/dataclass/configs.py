@@ -482,6 +482,9 @@ class CheckpointConfig(FairseqDataclass):
     save_dir: str = field(
         default="checkpoints", metadata={"help": "path to save checkpoints"}
     )
+    log_dir: str = field(
+        default="logs", metadata={"help": "path to save log outputs"}
+    )
     restore_file: str = field(
         default="checkpoint_last.pt",
         metadata={
