@@ -400,7 +400,7 @@ class FairseqTask(object):
         )
 
     def train_step(
-        self, sample, model, criterion, optimizer, update_num, ignore_grad=False
+        self, sample, model, regularizer, criterion, optimizer, update_num, ignore_grad=False
     ):
         """
         Do forward and backward, and return the loss as computed by *criterion*
@@ -410,6 +410,7 @@ class FairseqTask(object):
             sample (dict): the mini-batch. The format is defined by the
                 :class:`~fairseq.data.FairseqDataset`.
             model (~fairseq.models.BaseFairseqModel): the model
+            regularizer (~fairseq.models.BaseFairseqModel): the regularization model
             criterion (~fairseq.criterions.FairseqCriterion): the criterion
             optimizer (~fairseq.optim.FairseqOptimizer): the optimizer
             update_num (int): the current update
@@ -425,7 +426,7 @@ class FairseqTask(object):
         model.train()
         model.set_num_updates(update_num)
         with torch.autograd.profiler.record_function("forward"):
-            loss, sample_size, logging_output = criterion(model, sample)
+            loss, sample_size, logging_output = criterion(model, regularizer, sample)
         if ignore_grad:
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):

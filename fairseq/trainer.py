@@ -570,6 +570,7 @@ class Trainer(object):
         """Do forward, backward and parameter update."""
         self._set_seed()
         self.model.train()
+        self.reg_model.eval()
         self.criterion.train()
         self.zero_grad()
 
@@ -601,6 +602,7 @@ class Trainer(object):
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
                         model=self.model,
+                        regularizer=self.reg_model,
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),

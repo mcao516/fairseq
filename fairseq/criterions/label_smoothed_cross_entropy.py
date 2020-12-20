@@ -10,11 +10,20 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(lprobs, target, probs, regularizer_probs, epsilon, elr_lambda, ignore_index=None, reduce=True):
+    """
+    Args:
+        lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
+        target (Tensor): [batch_size * max_tgt_len]
+        probs (Tensor): [batch_size * max_tgt_len, vocab_size]
+        regularizer_probs (Tensor): [batch_size * max_tgt_len, vocab_size]
+
+    """
     if target.dim() == lprobs.dim() - 1:
-        target = target.unsqueeze(-1)
-    nll_loss = -lprobs.gather(dim=-1, index=target)
-    smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+        target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
+    nll_loss = -lprobs.gather(dim=-1, index=target) # [batch_size * max_tgt_len, 1]
+    smooth_loss = -lprobs.sum(dim=-1, keepdim=True) # [batch_size * max_tgt_len, 1]
+
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
@@ -27,7 +36,11 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
         smooth_loss = smooth_loss.sum()
     eps_i = epsilon / lprobs.size(-1)
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
-    return loss, nll_loss
+
+    # ELR regularization loss
+    elr_reg = (1 - (probs * regularizer_probs).sum(dim=1).log()).mean()
+    loss += elr_lambda * elr_reg
+    return loss, nll_loss, elr_reg
 
 
 @register_criterion("label_smoothed_cross_entropy")
@@ -37,12 +50,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         task,
         sentence_avg,
         label_smoothing,
+        elr_lambda,
         ignore_prefix_size=0,
         report_accuracy=False,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
+        self.elr_lambda = elr_lambda
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
 
@@ -56,24 +71,45 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='report accuracy metric')
         parser.add_argument('--ignore-prefix-size', default=0, type=int,
                             help='Ignore first N tokens')
+        parser.add_argument('--elr-lambda', default=1., type=float, metavar='D',
+                            help='ELR Lambda, 0 means no ELR')
         # fmt: on
 
-    def forward(self, model, sample, reduce=True):
+    def forward(self, model, regularizer, sample, reduce=True):
         """Compute the loss for the given sample.
 
         Returns a tuple with three elements:
         1) the loss
         2) the sample size, which is used as the denominator for the gradient
         3) logging outputs to display while training
+
+        Args:
+            model (BARTModel): the model
+            regularizer (BARTModel): the regularization model
+            net_output (Tensor): [batch_size, max_tgt_len, vocab_size]
+            sample (dict): {
+                'id' (Tensor): [batch_size],
+                'nsentences' (int): number of samples, 
+                'ntokens' (int): total number of tokens?, 
+                'net_input': {
+                    'src_tokens' (Tensor): [batch_size, max_src_len], 
+                    'src_lengths' (Tensor): [batch_size], 
+                    'prev_output_tokens' (Tensor): [batch_size, max_tgt_len], 
+                }, 
+                'target' (Tensor): [batch_size, max_tgt_len]
+            }
         """
         net_output = model(**sample["net_input"])
-        loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
+        with torch.no_grad():
+            regnet_output = regularizer(**sample["net_input"])
+        loss, nll_loss, elr_loss = self.compute_loss(model, regularizer, net_output, regnet_output, sample, reduce=reduce)
         sample_size = (
             sample["target"].size(0) if self.sentence_avg else sample["ntokens"]
         )
         logging_output = {
             "loss": loss.data,
             "nll_loss": nll_loss.data,
+            "elr_loss": elr_loss.data,
             "ntokens": sample["ntokens"],
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
@@ -85,8 +121,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         return loss, sample_size, logging_output
 
     def get_lprobs_and_target(self, model, net_output, sample):
-        lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        target = model.get_targets(sample, net_output)
+        lprobs = model.get_normalized_probs(net_output, log_probs=True) # log_softmax: [batch_size, max_tgt_len, vocab_size]
+        target = model.get_targets(sample, net_output) # target: [batch_size, max_tgt_len]
         if self.ignore_prefix_size > 0:
             if getattr(lprobs, "batch_first", False):
                 lprobs = lprobs[:, self.ignore_prefix_size :, :].contiguous()
@@ -96,16 +132,30 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 target = target[self.ignore_prefix_size :, :].contiguous()
         return lprobs.view(-1, lprobs.size(-1)), target.view(-1)
 
-    def compute_loss(self, model, net_output, sample, reduce=True):
+    def get_probs(self, model, net_output):
+        probs = model.get_normalized_probs(net_output, log_probs=False)
+        if self.ignore_prefix_size > 0:
+            raise Exception("Does not support ignore prefix for now.")
+        return probs.view(-1, probs.size(-1))
+
+    def compute_loss(self, model, regularizer, net_output, regnet_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
-        loss, nll_loss = label_smoothed_nll_loss(
+
+        probs = self.get_probs(model, net_output)
+        regularizer_probs = self.get_probs(regularizer, regnet_output).detach()
+        assert probs.shape == regularizer_probs.shape == lprobs.shape
+
+        loss, nll_loss, elr_loss = label_smoothed_nll_loss(
             lprobs,
             target,
+            probs,
+            regularizer_probs,
             self.eps,
+            self.elr_lambda,
             ignore_index=self.padding_idx,
             reduce=reduce,
         )
-        return loss, nll_loss
+        return loss, nll_loss, elr_loss
 
     def compute_accuracy(self, model, net_output, sample):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
