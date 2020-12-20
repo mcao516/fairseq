@@ -866,13 +866,14 @@ class Trainer(object):
 
         with torch.no_grad():
             self.model.eval()
+            self.reg_model.eval()
             self.criterion.eval()
 
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             try:
                 _loss, sample_size, logging_output = self.task.valid_step(
-                    sample, self.model, self.criterion
+                    sample, self.model, self.reg_model, self.criterion
                 )
             except RuntimeError as e:
                 if "out of memory" in str(e):
