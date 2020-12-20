@@ -13,6 +13,7 @@ import contextlib
 import logging
 import sys
 import time
+import random
 from argparse import Namespace
 from itertools import chain
 from typing import Any, Dict, List
@@ -676,7 +677,7 @@ class Trainer(object):
             )
 
         # write logs into file
-        if self.data_parallel_rank == 0:
+        if self.data_parallel_rank == 0 and random.randint(0, 1e4) % 10 == 0:
             if not os.path.exists(self.cfg['checkpoint']['log_dir']):
                 os.makedirs(self.cfg['checkpoint']['log_dir'])
 
