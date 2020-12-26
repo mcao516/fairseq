@@ -158,7 +158,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             regularizer_probs = self.get_probs(regularizer, regnet_output).detach()
             assert probs.shape == regularizer_probs.shape == lprobs.shape
 
-            ELR_loss = regularization_loss(probs, regularizer_probs)
+            ELR_loss = regularization_loss(probs, regularizer_probs, self.elr_lambda)
             loss += self.elr_lambda * ELR_loss
         
         return loss, nll_loss, ELR_loss
