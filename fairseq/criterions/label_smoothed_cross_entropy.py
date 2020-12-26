@@ -10,14 +10,11 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 
-def label_smoothed_nll_loss(lprobs, target, probs, regularizer_probs, epsilon, elr_lambda, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
     """
     Args:
         lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
         target (Tensor): [batch_size * max_tgt_len]
-        probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-        regularizer_probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-
     """
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
@@ -36,12 +33,17 @@ def label_smoothed_nll_loss(lprobs, target, probs, regularizer_probs, epsilon, e
         smooth_loss = smooth_loss.sum()
     eps_i = epsilon / lprobs.size(-1)
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
+    
+    return loss, nll_loss
 
-    # ELR regularization loss
-    elr_reg = (1 - (probs * regularizer_probs).sum(dim=1).log()).mean()
-    loss += elr_lambda * elr_reg
-    return loss, nll_loss, elr_reg
-
+def regularization_loss(probs, regularizer_probs, elr_lambda):
+    """
+    Args:
+        probs (Tensor): [batch_size * max_tgt_len, vocab_size]
+        regularizer_probs (Tensor): [batch_size * max_tgt_len, vocab_size]
+    """
+    loss = (1 - (probs * regularizer_probs).sum(dim=1).log()).mean()
+    return loss
 
 @register_criterion("label_smoothed_cross_entropy")
 class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
@@ -100,20 +102,23 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             }
         """
         net_output = model(**sample["net_input"])
-        with torch.no_grad():
-            regnet_output = regularizer(**sample["net_input"])
-        loss, nll_loss, elr_loss = self.compute_loss(model, regularizer, net_output, regnet_output, sample, reduce=reduce)
+        regnet_output = None
+        if regularizer is not None:
+            with torch.no_grad():
+                regnet_output = regularizer(**sample["net_input"])
+        loss, nll_loss, ELR_loss = self.compute_loss(model, regularizer, net_output, regnet_output, sample, reduce=reduce)
         sample_size = (
             sample["target"].size(0) if self.sentence_avg else sample["ntokens"]
         )
         logging_output = {
             "loss": loss.data,
             "nll_loss": nll_loss.data,
-            "elr_loss": elr_loss.data,
+            "elr_loss": ELR_loss.data,
             "ntokens": sample["ntokens"],
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
         }
+        
         if self.report_accuracy:
             n_correct, total = self.compute_accuracy(model, net_output, sample)
             logging_output["n_correct"] = utils.item(n_correct.data)
@@ -140,22 +145,23 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
     def compute_loss(self, model, regularizer, net_output, regnet_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
-
-        probs = self.get_probs(model, net_output)
-        regularizer_probs = self.get_probs(regularizer, regnet_output).detach()
-        assert probs.shape == regularizer_probs.shape == lprobs.shape
-
-        loss, nll_loss, elr_loss = label_smoothed_nll_loss(
+        loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
             target,
-            probs,
-            regularizer_probs,
             self.eps,
-            self.elr_lambda,
             ignore_index=self.padding_idx,
             reduce=reduce,
         )
-        return loss, nll_loss, elr_loss
+        ELR_loss = torch.tensor(0.0)
+        if regularizer is not None and regnet_output is not None:
+            probs = self.get_probs(model, net_output)
+            regularizer_probs = self.get_probs(regularizer, regnet_output).detach()
+            assert probs.shape == regularizer_probs.shape == lprobs.shape
+
+            ELR_loss = regularization_loss(probs, regularizer_probs)
+            loss += self.elr_lambda * ELR_loss
+        
+        return loss, nll_loss, ELR_loss
 
     def compute_accuracy(self, model, net_output, sample):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)

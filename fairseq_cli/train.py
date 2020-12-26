@@ -121,10 +121,8 @@ def main(cfg: DictConfig) -> None:
         disable_iterator_cache=task.has_sharded_data("train"),
     )
 
-    # Load the regularizaton model
-    _ = trainer.load_regularizer_checkpoint(
-        cfg.checkpoint.regularization_file,
-    )
+    # create regularizaton model
+    trainer.build_regularizer()
 
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
@@ -143,6 +141,9 @@ def main(cfg: DictConfig) -> None:
         valid_losses, should_stop = train(cfg, trainer, task, epoch_itr)
         if should_stop:
             break
+
+        # update regularization model
+        trainer.update_regularizer()
 
         # only use first validation loss to update the learning rate
         lr = trainer.lr_step(epoch_itr.epoch, valid_losses[0])
@@ -229,7 +230,7 @@ def train(
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
-            log_output = trainer.train_step(samples)
+            log_output = trainer.train_step(samples, epoch_itr)
 
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats

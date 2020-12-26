@@ -407,7 +407,6 @@ class Trainer(object):
                 self._start_time = time.time()
 
             self.lr_step(epoch)
-
             if "metrics" in extra_state and not reset_meters:
                 metrics.load_state_dict(extra_state["metrics"])
 
@@ -420,60 +419,16 @@ class Trainer(object):
 
         return extra_state
 
-    def load_regularizer_checkpoint(
-        self,
-        filename,
-    ):
-        """
-        Load regularization model from a checkpoint file.
-        rank = 0 will load the checkpoint, and then broadcast it to all
-        other ranks.
-        """
-        bexists = PathManager.isfile(filename)
-        if bexists:
-            load_on_all_ranks = (
-                self.cfg.checkpoint.load_checkpoint_on_all_dp_ranks
-                # TPUs don't support broadcast yet, so load checkpoints
-                # on every worker for now
-                or self.tpu
-            )
+    def build_regularizer(self):
+        """Build regularization model."""
+        self._reg_model = deepcopy(self.get_model())
 
-            if load_on_all_ranks or self.data_parallel_rank == 0:
-                state = checkpoint_utils.load_checkpoint_to_cpu(filename)
-            else:
-                state = None
-
-            if self.data_parallel_world_size > 1 and not load_on_all_ranks:
-                state = distributed_utils.broadcast_object(
-                    state,
-                    src_rank=0,
-                    group=self.data_parallel_process_group,
-                    dist_device=self.device,
-                )
-
-            # load model parameters
-            try:
-                self._reg_model = deepcopy(self.get_model())
-                self._reg_model.load_state_dict(
-                    state["model"], strict=True, model_cfg=self.cfg.model
-                )
-
-                logger.info(
-                    "loaded regularization model checkpoint from: {}".format(
-                        filename,
-                    )
-                )
-                
-            except Exception:
-                raise Exception(
-                    "Cannot load model parameters from checkpoint {}; "
-                    "please ensure that the architectures match.".format(filename)
-                )
-            extra_state = state["extra_state"]
-        else:
-            logger.info("no existing regularization model found at: {}".format(filename))
-
-        return extra_state
+    def update_regularizer(self):
+        """Update regularization model."""
+        beta = 0.5
+        updated_weights = list(map(lambda p: beta * p[1] + (1 - beta) * p[0],
+                               zip(self.model.parameters(), self.reg_model.parameters())))
+        self.reg_model.set_weights(updated_weights)
 
     def get_train_iterator(
         self,
@@ -569,7 +524,7 @@ class Trainer(object):
         self._dummy_batch = batch
 
     @metrics.aggregate("train")
-    def train_step(self, samples, raise_oom=False):
+    def train_step(self, samples, epoch_itr, raise_oom=False):
         """Do forward, backward and parameter update."""
         self._set_seed()
         self.model.train()
@@ -602,10 +557,11 @@ class Trainer(object):
             try:
                 with maybe_no_sync():
                     # forward and backward
+                    reg_model = None if epoch_itr.epoch == 1 else self.reg_model
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
                         model=self.model,
-                        regularizer=self.reg_model,
+                        regularizer=reg_model,
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
