@@ -428,7 +428,10 @@ class Trainer(object):
         beta = 0.5
         updated_weights = list(map(lambda p: beta * p[1] + (1 - beta) * p[0],
                                zip(self.model.parameters(), self.reg_model.parameters())))
-        self.reg_model.set_weights(updated_weights)
+
+        with torch.no_grad():
+            for i, (name, param) in enumerate(self.reg_model.named_parameters()):
+                param= torch.nn.Parameter(updated_weights[i])
 
     def get_train_iterator(
         self,
