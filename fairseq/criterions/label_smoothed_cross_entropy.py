@@ -62,8 +62,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
         # ==================================================================================================
 
-        i = sample['id'].tolist()[0]
-        if i < 100 and model.training:
+        ids = sample['id'].tolist()
+        i = min(ids)
+        if i < 30 and model.training:
             with torch.no_grad():
                 _, nll_token_loss = self.compute_loss(model, net_output, sample, reduce=False)
 
@@ -73,7 +74,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 'sentence_loss': nll_loss.detach(),
             }
 
-            path = '/home/mcao610/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
+            path = '/home/mila/c/caomeng/fairseq/loss_analysis_50000/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
             torch.save(data_to_save, path)
         
         # ==================================================================================================
