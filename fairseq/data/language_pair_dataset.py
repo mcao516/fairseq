@@ -7,6 +7,7 @@ import logging
 
 import numpy as np
 import torch
+from os import path
 from fairseq.data import FairseqDataset, data_utils
 
 
@@ -110,6 +111,19 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
+    mask = None
+    if samples[0].get('mask', None) is not None:
+        mask = merge(
+            'mask',
+            left_pad=left_pad_target,
+            pad_to_length=pad_to_length["target"]
+            if pad_to_length is not None
+            else None,
+        )
+        mask = mask.index_select(0, sort_order)
+        # tgt_lengths = torch.LongTensor([s['mask'].numel() for s in samples]).index_select(0, sort_order)
+        # ntokens = sum(len(s['mask']) for s in samples)
+
     batch = {
         "id": id,
         "nsentences": len(samples),
@@ -124,7 +138,9 @@ def collate(
         batch["net_input"]["prev_output_tokens"] = prev_output_tokens.index_select(
             0, sort_order
         )
-
+    if mask is not None:
+        batch['mask'] = mask
+    
     if samples[0].get("alignment", None) is not None:
         bsz, tgt_sz = batch["target"].shape
         src_sz = batch["net_input"]["src_tokens"].shape[1]
@@ -203,6 +219,20 @@ class LanguagePairDataset(FairseqDataset):
             will contain a field 'tgt_lang_id' which indicates the target language
              of the samples.
     """
+    @staticmethod
+    def read_mask(mask_path):
+        assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
+        logger.warning("Loss abstention mask is loaded!")
+        mask = []
+        with open(mask_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                mask.append(torch.tensor([int(i) for i in line.split()], dtype=torch.long))
+        return mask
+
+    # define class variable
+    mask = read_mask.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/train.mask")
+
 
     def __init__(
         self,
@@ -332,6 +362,12 @@ class LanguagePairDataset(FairseqDataset):
             "source": src_item,
             "target": tgt_item
         }
+        if self.tgt is not None and self.mask is not None and len(self.tgt) == len(self.mask):
+            mask_item = self.mask[index]
+            assert tgt_item.size() == mask_item.size(), "Mask size: {}; Target size: {}".format(mask_item.size(), 
+                                                                                                tgt_item.size())
+            example['mask'] = mask_item
+
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
         if self.constraints is not None:
