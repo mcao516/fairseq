@@ -222,17 +222,17 @@ class LanguagePairDataset(FairseqDataset):
     @staticmethod
     def read_mask(mask_path):
         assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
-        logger.warning("Loss abstention mask is loaded!")
         mask = []
         with open(mask_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 mask.append(torch.tensor([int(i) for i in line.split()], dtype=torch.long))
+        logger.warning("Loss abstention mask loaded (size={}).".format(len(mask)))
         return mask
-
+    
     # define class variable
-    mask = read_mask.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/train.mask")
-
+    train_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/train.mask")
+    val_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/val.mask")
 
     def __init__(
         self,
@@ -362,8 +362,16 @@ class LanguagePairDataset(FairseqDataset):
             "source": src_item,
             "target": tgt_item
         }
-        if self.tgt is not None and self.mask is not None and len(self.tgt) == len(self.mask):
-            mask_item = self.mask[index]
+        if self.tgt is not None:
+            assert self.train_mask is not None and self.val_mask is not None
+            if len(self.tgt) == len(self.train_mask):
+                mask = self.train_mask
+            elif len(self.tgt) == len(self.val_mask):
+                mask = self.val_mask
+            else:
+                raise Exception("Something wrong with the mask size!")
+            
+            mask_item = mask[index]
             assert tgt_item.size() == mask_item.size(), "Mask size: {}; Target size: {}".format(mask_item.size(), 
                                                                                                 tgt_item.size())
             example['mask'] = mask_item

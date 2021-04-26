@@ -9,28 +9,52 @@ import torch
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
+UNK_ID = 3
+Alpha = 1.35
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None):
+    """
+    Args:
+        lprobs (tensor): [bs * tgt_length, vocab_size]
+        target (tensor): [bs * tgt_length]
+        mask (tensor): [bs * tgt_length]
+    """
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
-    nll_loss = -lprobs.gather(dim=-1, index=target)
-    smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+
+    nll_loss = -lprobs.gather(dim=-1, index=target)  # nll_loss: [bs * tgt_length, 1]
+    smooth_loss = -lprobs.sum(dim=-1, keepdim=True)  # smooth_loss: [bs * tgt_length, 1]
 
     # if mask is not None:
     #     nll_loss.masked_fill_((1 - mask).bool(), 0.)
     #     smooth_loss.masked_fill_((1 - mask).bool(), 0.)
 
-    if ignore_index is not None:
+    if ignore_index is not None:  # 1
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
         smooth_loss.masked_fill_(pad_mask, 0.0)
     else:
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
-    if reduce:
+
+    # ====== calculate abstention loss ======
+    lprob_unk = lprobs[:, UNK_ID]  # lprob_unk: [bs * tgt_length]
+    prob_unk = torch.exp(lprob_unk)  # prob_unk: [bs * tgt_length]
+    prob_unk_reduced = (1. - prob_unk)
+
+    a = prob_unk_reduced.masked_fill_(mask.eq(0), 1.0).unsqueeze(-1)
+    b = (prob_unk_reduced - Alpha) * torch.log(prob_unk_reduced) * mask
+    b = b.unsqueeze(-1)
+
+    nll_loss = a * nll_loss + b
+    smooth_loss = a * smooth_loss + b
+    # =======================================
+
+    if reduce:  # True
         nll_loss = nll_loss.sum()
         smooth_loss = smooth_loss.sum()
-    eps_i = epsilon / lprobs.size(-1)
+    
+    eps_i = epsilon / lprobs.size(-1)  # 0.1
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
 
@@ -104,12 +128,13 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
     def compute_loss(self, model, net_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
 
-        # ======= loss abstention =========
+        # ========= loss abstention =========
         mask = None
         if sample.get('mask', None) is not None:
             mask = sample['mask'].view(-1)
             assert target.size() == mask.size(), "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
-        # =================================
+        assert mask is not None
+        # ===================================
 
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
