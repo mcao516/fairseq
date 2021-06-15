@@ -226,7 +226,7 @@ class LanguagePairDataset(FairseqDataset):
         with open(mask_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                mask.append(torch.tensor([int(i) for i in line.split()], dtype=torch.long))
+                mask.append(torch.tensor([float(i) for i in line.split()]))
         logger.warning("Loss abstention mask loaded (size={}).".format(len(mask)))
         return mask
     
