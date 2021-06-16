@@ -231,8 +231,8 @@ class LanguagePairDataset(FairseqDataset):
         return mask
     
     # define class variable
-    train_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/train.mask")
-    val_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/val.mask")
+    train_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/train-prob.mask")
+    val_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/val-prob.mask")
 
     def __init__(
         self,
