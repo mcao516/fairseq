@@ -69,7 +69,7 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     
     eps_i = epsilon / lprobs.size(-1)  # 0.1
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
-    return loss, nll_loss, nll_loss_regularized, regularizer
+    return loss, nll_loss
 
 
 @register_criterion("label_smoothed_cross_entropy")
@@ -109,7 +109,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         3) logging outputs to display while training
         """
         net_output = model(**sample["net_input"])
-        loss, nll_loss, _, _ = self.compute_loss(model, net_output, sample, reduce=reduce)
+        loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
 
         # ========================================= LOG LOSS =============================================
 
@@ -171,7 +171,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         assert mask is not None
         # =============================================
 
-        loss, nll_loss, nll_loss_regularized, regularizer = label_smoothed_nll_loss(
+        loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
             target,
             self.eps,
@@ -179,7 +179,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             reduce=reduce,
             mask=mask
         )
-        return loss, nll_loss, nll_loss_regularized, regularizer
+        return loss, nll_loss
 
     def compute_accuracy(self, model, net_output, sample):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
