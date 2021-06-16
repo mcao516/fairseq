@@ -29,7 +29,7 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     # ============ calculate loss =============
     lprob_unk = -lprobs[:, UNK_ID]  # lprob_unk: [bs * tgt_length]
     assert lprob_unk.size() == mask.size() == nll_loss.size()[:-1]
-    nll_loss = nll_loss.squeeze(-1) * mask + lprob_unk * (1 - mask)
+    nll_loss = nll_loss.squeeze(-1) * mask + lprob_unk * (1.0 - mask)
 
     nll_loss = nll_loss.unsqueeze(-1)
     # =========================================
