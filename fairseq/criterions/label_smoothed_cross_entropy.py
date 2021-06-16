@@ -26,13 +26,13 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     nll_loss = -lprobs.gather(dim=-1, index=target)  # nll_loss: [bs * tgt_length, 1]
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)  # smooth_loss: [bs * tgt_length, 1]
 
-    # ============ calculate loss =============
+    # ================== calculate loss ===================
     lprob_unk = -lprobs[:, UNK_ID]  # lprob_unk: [bs * tgt_length]
     assert lprob_unk.size() == mask.size() == nll_loss.size()[:-1]
     nll_loss = nll_loss.squeeze(-1) * mask + lprob_unk * (1.0 - mask)
 
     nll_loss = nll_loss.unsqueeze(-1)
-    # =========================================
+    # =====================================================
 
     # if mask is not None:
     #     nll_loss.masked_fill_((1 - mask).bool(), 0.)
