@@ -273,21 +273,26 @@ def get_from_cache(url, cache_dir=None):
         os.makedirs(cache_dir)
 
     # Get eTag to add to filename, if it exists.
-    if url.startswith("s3://"):
-        etag = s3_etag(url)
-    else:
-        try:
-            import requests
+    # if url.startswith("s3://"):
+    #     etag = s3_etag(url)
+    # else:
+    #     try:
+    #         import requests
 
-            response = request_wrap_timeout(
-                partial(requests.head, url, allow_redirects=True), url
-            )
-            if response.status_code != 200:
-                etag = None
-            else:
-                etag = response.headers.get("ETag")
-        except RuntimeError:
-            etag = None
+    #         response = request_wrap_timeout(
+    #             partial(requests.head, url, allow_redirects=True), url
+    #         )
+    #         if response.status_code != 200:
+    #             etag = None
+    #         else:
+    #             etag = response.headers.get("ETag")
+    #     except RuntimeError:
+    #         etag = None
+
+    if url == "https://dl.fbaipublicfiles.com/fairseq/gpt2_bpe/encoder.json":
+        etag = 'W/"dffec25a898b1f5e569bec4dffd7e5c0"'
+    elif url == "https://dl.fbaipublicfiles.com/fairseq/gpt2_bpe/vocab.bpe":
+        etag = 'W/"75a37753dd7a28a2c5df80c28bf06e4e"'
 
     filename = url_to_filename(url, etag)
 
