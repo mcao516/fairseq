@@ -121,10 +121,11 @@ def main(cfg: DictConfig) -> None:
         disable_iterator_cache=task.has_sharded_data("train"),
     )
 
-    # Load the regularizaton model
-    _ = trainer.load_regularizer_checkpoint(
-        cfg.checkpoint.regularization_file,
-    )
+    # load target model
+    _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
+
+    # Load MLE model
+    _ = trainer.load_mle_checkpoint(cfg.checkpoint.mle_file)
 
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
@@ -154,6 +155,7 @@ def main(cfg: DictConfig) -> None:
             # don't cache epoch iterators for sharded datasets
             disable_iterator_cache=task.has_sharded_data("train"),
         )
+    
     train_meter.stop()
     logger.info("done training in {:.1f} seconds".format(train_meter.sum))
 

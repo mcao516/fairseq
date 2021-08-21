@@ -67,6 +67,9 @@ class Trainer(object):
         # copy model and criterion to current device/dtype
         self._criterion = criterion
         self._model = model
+        self._mle_model = deepcopy(self._model)
+        self._tgt_model = deepcopy(self._model)
+
         if cfg.common.fp16:
             self._criterion = self._criterion.half()
             self._model = self._model.half()
@@ -101,7 +104,6 @@ class Trainer(object):
         self._warn_once = set()
         self._wrapped_criterion = None
         self._wrapped_model = None
-        self._wrapped_reg_model = None
 
         # TODO(myleott): support tpu
         if self.cuda and self.data_parallel_world_size > 1:
@@ -140,7 +142,6 @@ class Trainer(object):
         self._optimizer = None
         self._wrapped_criterion = None
         self._wrapped_model = None
-        self._wrapped_reg_model = None
 
     @property
     def data_parallel_world_size(self):
@@ -195,17 +196,28 @@ class Trainer(object):
         return self._wrapped_model
 
     @property
-    def reg_model(self):
-        if self._wrapped_reg_model is None:
-            if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
-                self._wrapped_reg_model = models.DistributedFairseqModel(
-                    self.cfg.distributed_training,
-                    self._reg_model,
-                    process_group=self.data_parallel_process_group,
-                )
-            else:
-                self._wrapped_reg_model = self._reg_model
-        return self._wrapped_reg_model
+    def mle_model(self):
+        if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
+            assert self._mle_model is not None
+            return models.DistributedFairseqModel(
+                self.cfg.distributed_training,
+                self._mle_model,
+                process_group=self.data_parallel_process_group,
+            )
+        else:
+            return self._mle_model
+
+    @property
+    def tgt_model(self):
+        if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
+            assert self._tgt_model is not None
+            return models.DistributedFairseqModel(
+                self.cfg.distributed_training,
+                self._tgt_model,
+                process_group=self.data_parallel_process_group,
+            )
+        else:
+            return self._tgt_model
 
     @property
     def optimizer(self):
@@ -420,12 +432,12 @@ class Trainer(object):
 
         return extra_state
 
-    def load_regularizer_checkpoint(
+    def load_mle_checkpoint(
         self,
         filename,
     ):
         """
-        Load regularization model from a checkpoint file.
+        Load MLE model from a checkpoint file.
         rank = 0 will load the checkpoint, and then broadcast it to all
         other ranks.
         """
@@ -453,13 +465,12 @@ class Trainer(object):
 
             # load model parameters
             try:
-                self._reg_model = deepcopy(self.get_model())
-                self._reg_model.load_state_dict(
+                self._mle_model.load_state_dict(
                     state["model"], strict=True, model_cfg=self.cfg.model
                 )
 
                 logger.info(
-                    "loaded regularization model checkpoint from: {}".format(
+                    "loaded MLE model checkpoint from: {}".format(
                         filename,
                     )
                 )
@@ -471,7 +482,61 @@ class Trainer(object):
                 )
             extra_state = state["extra_state"]
         else:
-            logger.info("no existing regularization model found at: {}".format(filename))
+            logger.info("no existing MLE model found at: {}".format(filename))
+
+        return extra_state
+
+    def load_tgt_checkpoint(
+        self,
+        filename,
+    ):
+        """
+        Load target model from a checkpoint file.
+        rank = 0 will load the checkpoint, and then broadcast it to all
+        other ranks.
+        """
+        bexists = PathManager.isfile(filename)
+        if bexists:
+            load_on_all_ranks = (
+                self.cfg.checkpoint.load_checkpoint_on_all_dp_ranks
+                # TPUs don't support broadcast yet, so load checkpoints
+                # on every worker for now
+                or self.tpu
+            )
+
+            if load_on_all_ranks or self.data_parallel_rank == 0:
+                state = checkpoint_utils.load_checkpoint_to_cpu(filename)
+            else:
+                state = None
+
+            if self.data_parallel_world_size > 1 and not load_on_all_ranks:
+                state = distributed_utils.broadcast_object(
+                    state,
+                    src_rank=0,
+                    group=self.data_parallel_process_group,
+                    dist_device=self.device,
+                )
+
+            # load model parameters
+            try:
+                self._tgt_model.load_state_dict(
+                    state["model"], strict=True, model_cfg=self.cfg.model
+                )
+
+                logger.info(
+                    "loaded target model checkpoint from: {}".format(
+                        filename,
+                    )
+                )
+                
+            except Exception:
+                raise Exception(
+                    "Cannot load model parameters from checkpoint {}; "
+                    "please ensure that the architectures match.".format(filename)
+                )
+            extra_state = state["extra_state"]
+        else:
+            logger.info("no existing target model found at: {}".format(filename))
 
         return extra_state
 
@@ -573,7 +638,8 @@ class Trainer(object):
         """Do forward, backward and parameter update."""
         self._set_seed()
         self.model.train()
-        self.reg_model.eval()
+        self.tgt_model.train()
+        self.mle_model.eval()
         self.criterion.train()
         self.zero_grad()
 
@@ -605,7 +671,7 @@ class Trainer(object):
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
                         model=self.model,
-                        regularizer=self.reg_model,
+                        regularizer=self.mle_model,
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
@@ -866,14 +932,14 @@ class Trainer(object):
 
         with torch.no_grad():
             self.model.eval()
-            self.reg_model.eval()
+            self.tgt_model.eval()
             self.criterion.eval()
 
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             try:
                 _loss, sample_size, logging_output = self.task.valid_step(
-                    sample, self.model, self.reg_model, self.criterion
+                    sample, self.model, self.mle_model, self.criterion
                 )
             except RuntimeError as e:
                 if "out of memory" in str(e):
