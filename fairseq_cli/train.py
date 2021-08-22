@@ -249,6 +249,14 @@ def train(
             cfg, trainer, task, epoch_itr, valid_subsets, end_of_epoch
         )
 
+        # update taget model
+        # def polyak_update(model, model_, target_lr=0.001):
+        #     for param_, param in zip(model_.parameters(), model.parameters()):
+        #         param_.data.copy_((1 - target_lr) * param_ + target_lr * param)
+        # polyak_update(trainer.model, trainer.tgt_model)
+        
+        trainer.polyak_update()
+
         if should_stop:
             break
 

@@ -475,6 +475,10 @@ class OptimizationConfig(FairseqDataclass):
             "help": "specify global optimizer for syncing models on different GPUs/shards"
         },
     )
+    target_lr: float = field(
+        default=0.001,
+        metadata={"help": "learning rate for the target model update"},
+    )
 
 
 @dataclass

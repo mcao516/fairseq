@@ -635,6 +635,11 @@ class Trainer(object):
     def reset_dummy_batch(self, batch):
         self._dummy_batch = batch
 
+    def polyak_update(self):
+        target_lr = self.cfg.optimization.target_lr
+        for param_, param in zip(self.tgt_model.parameters(), self.model.parameters()):
+            param_.data.copy_((1 - target_lr) * param_ + target_lr * param)
+
     @metrics.aggregate("train")
     def train_step(self, samples, raise_oom=False):
         """Do forward, backward and parameter update."""
