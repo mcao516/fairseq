@@ -495,8 +495,8 @@ class CheckpointConfig(FairseqDataclass):
     mle_file: str = field(
         default="model.pt",
         metadata={
-            "help": "filename from which to load the regularization model checkpoint"
-            "(default: <regularization-dir>/model.pt"
+            "help": "filename from which to load the MLE model checkpoint"
+            "(default: <mle-dir>/model.pt"
         },
     )
     finetune_from_model: Optional[str] = field(

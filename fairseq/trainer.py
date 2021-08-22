@@ -67,8 +67,8 @@ class Trainer(object):
         # copy model and criterion to current device/dtype
         self._criterion = criterion
         self._model = model
-        self._mle_model = deepcopy(self._model)
-        self._tgt_model = deepcopy(self._model)
+        self._tgt_model = None
+        self._mle_model = None
 
         if cfg.common.fp16:
             self._criterion = self._criterion.half()
@@ -197,8 +197,8 @@ class Trainer(object):
 
     @property
     def mle_model(self):
+        assert self._mle_model is not None
         if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
-            assert self._mle_model is not None
             return models.DistributedFairseqModel(
                 self.cfg.distributed_training,
                 self._mle_model,
@@ -209,8 +209,8 @@ class Trainer(object):
 
     @property
     def tgt_model(self):
+        assert self._tgt_model is not None
         if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
-            assert self._tgt_model is not None
             return models.DistributedFairseqModel(
                 self.cfg.distributed_training,
                 self._tgt_model,
@@ -465,6 +465,7 @@ class Trainer(object):
 
             # load model parameters
             try:
+                self._mle_model = deepcopy(self.get_model())
                 self._mle_model.load_state_dict(
                     state["model"], strict=True, model_cfg=self.cfg.model
                 )
@@ -519,6 +520,7 @@ class Trainer(object):
 
             # load model parameters
             try:
+                self._tgt_model = deepcopy(self.get_model())
                 self._tgt_model.load_state_dict(
                     state["model"], strict=True, model_cfg=self.cfg.model
                 )
@@ -638,7 +640,7 @@ class Trainer(object):
         """Do forward, backward and parameter update."""
         self._set_seed()
         self.model.train()
-        self.tgt_model.train()
+        self.tgt_model.eval()
         self.mle_model.eval()
         self.criterion.train()
         self.zero_grad()
@@ -671,7 +673,8 @@ class Trainer(object):
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
                         model=self.model,
-                        regularizer=self.mle_model,
+                        tgt_model=self.tgt_model,
+                        mle_model=self.mle_model,
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
@@ -933,13 +936,18 @@ class Trainer(object):
         with torch.no_grad():
             self.model.eval()
             self.tgt_model.eval()
+            self.mle_model.eval()
             self.criterion.eval()
 
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             try:
                 _loss, sample_size, logging_output = self.task.valid_step(
-                    sample, self.model, self.mle_model, self.criterion
+                    sample=sample,
+                    model=self.model,
+                    tgt_model=self.tgt_model,
+                    mle_model=self.mle_model,
+                    criterion=self.criterion
                 )
             except RuntimeError as e:
                 if "out of memory" in str(e):
