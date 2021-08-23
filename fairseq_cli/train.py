@@ -124,9 +124,6 @@ def main(cfg: DictConfig) -> None:
     # load target model
     _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
 
-    # Load MLE model
-    _ = trainer.load_mle_checkpoint(cfg.checkpoint.mle_file)
-
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
     train_meter = meters.StopwatchMeter()

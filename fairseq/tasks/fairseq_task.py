@@ -400,7 +400,7 @@ class FairseqTask(object):
         )
 
     def train_step(
-        self, sample, model, tgt_model, mle_model, criterion, optimizer, update_num, ignore_grad=False
+        self, sample, model, tgt_model, criterion, optimizer, update_num, ignore_grad=False
     ):
         """
         Do forward and backward, and return the loss as computed by *criterion*
@@ -411,7 +411,6 @@ class FairseqTask(object):
                 :class:`~fairseq.data.FairseqDataset`.
             model (~fairseq.models.BaseFairseqModel): the model
             tgt_model (~fairseq.models.BaseFairseqModel): the target model
-            mle_model (~fairseq.models.BaseFairseqModel): the MLE model
             criterion (~fairseq.criterions.FairseqCriterion): the criterion
             optimizer (~fairseq.optim.FairseqOptimizer): the optimizer
             update_num (int): the current update
@@ -427,17 +426,17 @@ class FairseqTask(object):
         model.train()
         model.set_num_updates(update_num)
         with torch.autograd.profiler.record_function("forward"):
-            loss, sample_size, logging_output = criterion(model, tgt_model, sample, mle_model=mle_model)
+            loss, sample_size, logging_output = criterion(model, tgt_model, sample)
         if ignore_grad:
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
             optimizer.backward(loss)
         return loss, sample_size, logging_output
 
-    def valid_step(self, sample, model, tgt_model, mle_model, criterion):
+    def valid_step(self, sample, model, tgt_model, criterion):
         model.eval()
         with torch.no_grad():
-            loss, sample_size, logging_output = criterion(model, tgt_model, sample, mle_model=mle_model)
+            loss, sample_size, logging_output = criterion(model, tgt_model, sample)
         return loss, sample_size, logging_output
 
     def optimizer_step(self, optimizer, model, update_num):

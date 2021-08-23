@@ -67,7 +67,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='Ignore first N tokens')
         # fmt: on
 
-    def forward(self, model, tgt_model, sample, mle_model=None, reduce=True):
+    def forward(self, model, tgt_model, sample, reduce=True):
         """Compute the loss for the given sample.
 
         Returns a tuple with three elements:
@@ -89,14 +89,12 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 }, 
                 'target' (Tensor): [batch_size, max_tgt_len]
             }
-            mle_model (BARTModel): the MLE model
             net_output (Tensor): [batch_size, max_tgt_len, vocab_size]
         
         """
         net_output = model(**sample["net_input"])
         with torch.no_grad():
             tgt_output = tgt_model(**sample["net_input"])
-            mle_output = mle_model(**sample["net_input"])
 
         loss, nll_loss = self.compute_loss(
             model,
@@ -104,8 +102,6 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             sample,
             tgt_model=tgt_model,
             tgt_output=tgt_output,
-            mle_model=mle_model,
-            mle_output=mle_output,
             reduce=reduce
         )
         sample_size = (
@@ -149,16 +145,13 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             sample,
             tgt_model=None,
             tgt_output=None,
-            mle_model=None,
-            mle_output=None,
             reduce=True
         ):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
         probs = self.get_probs(model, net_output)
 
         tgt_probs = self.get_probs(tgt_model, tgt_output).detach()
-        mle_probs = self.get_probs(mle_model, mle_output).detach()
-        assert lprobs.shape == probs.shape == tgt_probs.shape == mle_probs.shape
+        assert lprobs.shape == probs.shape == tgt_probs.shape
 
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,

@@ -68,7 +68,6 @@ class Trainer(object):
         self._criterion = criterion
         self._model = model
         self._tgt_model = None
-        self._mle_model = None
 
         if cfg.common.fp16:
             self._criterion = self._criterion.half()
@@ -194,18 +193,6 @@ class Trainer(object):
             else:
                 self._wrapped_model = self._model
         return self._wrapped_model
-
-    @property
-    def mle_model(self):
-        assert self._mle_model is not None
-        if self.data_parallel_world_size > 1 and not self.cfg.optimization.use_bmuf:
-            return models.DistributedFairseqModel(
-                self.cfg.distributed_training,
-                self._mle_model,
-                process_group=self.data_parallel_process_group,
-            )
-        else:
-            return self._mle_model
 
     @property
     def tgt_model(self):
@@ -432,61 +419,6 @@ class Trainer(object):
 
         return extra_state
 
-    def load_mle_checkpoint(
-        self,
-        filename,
-    ):
-        """
-        Load MLE model from a checkpoint file.
-        rank = 0 will load the checkpoint, and then broadcast it to all
-        other ranks.
-        """
-        bexists = PathManager.isfile(filename)
-        if bexists:
-            load_on_all_ranks = (
-                self.cfg.checkpoint.load_checkpoint_on_all_dp_ranks
-                # TPUs don't support broadcast yet, so load checkpoints
-                # on every worker for now
-                or self.tpu
-            )
-
-            if load_on_all_ranks or self.data_parallel_rank == 0:
-                state = checkpoint_utils.load_checkpoint_to_cpu(filename)
-            else:
-                state = None
-
-            if self.data_parallel_world_size > 1 and not load_on_all_ranks:
-                state = distributed_utils.broadcast_object(
-                    state,
-                    src_rank=0,
-                    group=self.data_parallel_process_group,
-                    dist_device=self.device,
-                )
-
-            # load model parameters
-            try:
-                self._mle_model = deepcopy(self.get_model())
-                self._mle_model.load_state_dict(
-                    state["model"], strict=True, model_cfg=self.cfg.model
-                )
-
-                logger.info(
-                    "loaded MLE model checkpoint from: {}".format(
-                        filename,
-                    )
-                )
-                
-            except Exception:
-                raise Exception(
-                    "Cannot load model parameters from checkpoint {}; "
-                    "please ensure that the architectures match.".format(filename)
-                )
-            extra_state = state["extra_state"]
-        else:
-            logger.info("no existing MLE model found at: {}".format(filename))
-
-        return extra_state
-
     def load_tgt_checkpoint(
         self,
         filename,
@@ -646,7 +578,6 @@ class Trainer(object):
         self._set_seed()
         self.model.train()
         self.tgt_model.eval()
-        self.mle_model.eval()
         self.criterion.train()
         self.zero_grad()
 
@@ -679,7 +610,6 @@ class Trainer(object):
                         sample=sample,
                         model=self.model,
                         tgt_model=self.tgt_model,
-                        mle_model=self.mle_model,
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
@@ -941,7 +871,6 @@ class Trainer(object):
         with torch.no_grad():
             self.model.eval()
             self.tgt_model.eval()
-            self.mle_model.eval()
             self.criterion.eval()
 
             sample, is_dummy_batch = self._prepare_sample(sample)
@@ -951,7 +880,6 @@ class Trainer(object):
                     sample=sample,
                     model=self.model,
                     tgt_model=self.tgt_model,
-                    mle_model=self.mle_model,
                     criterion=self.criterion
                 )
             except RuntimeError as e:
