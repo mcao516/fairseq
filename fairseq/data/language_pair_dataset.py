@@ -7,6 +7,7 @@ import logging
 
 import numpy as np
 import torch
+from os import path
 from fairseq.data import FairseqDataset, data_utils
 
 
@@ -110,6 +111,17 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
+    p_mle = None
+    if samples[0].get('p_mle', None) is not None:
+        p_mle = merge(
+            'p_mle',
+            left_pad=left_pad_target,
+            pad_to_length=pad_to_length["target"]
+            if pad_to_length is not None
+            else None,
+        )
+        p_mle = p_mle.index_select(0, sort_order)
+
     batch = {
         "id": id,
         "nsentences": len(samples),
@@ -119,7 +131,9 @@ def collate(
             "src_lengths": src_lengths,
         },
         "target": target,
+        "p_mle": p_mle
     }
+
     if prev_output_tokens is not None:
         batch["net_input"]["prev_output_tokens"] = prev_output_tokens.index_select(
             0, sort_order
@@ -203,6 +217,20 @@ class LanguagePairDataset(FairseqDataset):
             will contain a field 'tgt_lang_id' which indicates the target language
              of the samples.
     """
+    @staticmethod
+    def read_mle_probs(mask_path):
+        assert path.exists(mask_path), "MLE posterior file does not exist: {}".format(mask_path)
+        mask = []
+        with open(mask_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                mask.append(torch.tensor([i for i in line.split()], dtype=torch.float))
+        logger.warning("MLE posterior probabilities loaded (size={}).".format(len(mask)))
+        return mask
+
+    # define class variable
+    train_mle_probs = read_mle_probs.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/mle-prob.train")
+    val_mle_probs = read_mle_probs.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/mle-prob.val")
 
     def __init__(
         self,
@@ -332,6 +360,19 @@ class LanguagePairDataset(FairseqDataset):
             "source": src_item,
             "target": tgt_item
         }
+        if self.tgt is not None:
+            assert self.train_mle_probs is not None and self.val_mle_probs is not None
+            
+            if len(self.tgt) == len(self.train_mle_probs):
+                p_mle = self.train_mle_probs
+            elif len(self.tgt) == len(self.val_mle_probs):
+                p_mle = self.val_mle_probs
+            else:
+                raise Exception("Something wrong with p_mle's size!")
+
+            example['p_mle'] = p_mle[index]
+            assert tgt_item.size() == p_mle[index].size()
+
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
         if self.constraints is not None:

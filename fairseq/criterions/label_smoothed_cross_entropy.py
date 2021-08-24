@@ -16,7 +16,8 @@ def label_smoothed_nll_loss(lprobs, target, probs, epsilon, ignore_index=None, r
         lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
         target (Tensor): [batch_size * max_tgt_len]
         probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-
+        p_mle (Tensor): [batch_size * max_tgt_len]
+        
     """
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
@@ -152,6 +153,11 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
         tgt_probs = self.get_probs(tgt_model, tgt_output).detach()
         assert lprobs.shape == probs.shape == tgt_probs.shape
+
+        p_mle = None
+        if sample.get('p_mle', None) is not None:
+            p_mle = sample['p_mle'].view(-1)
+            assert target.size() == p_mle.size(), "Target size: {}; P_MLE size: {}.".format(target.size(), p_mle.size())
 
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
