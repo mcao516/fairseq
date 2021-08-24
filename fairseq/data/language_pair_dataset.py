@@ -229,8 +229,8 @@ class LanguagePairDataset(FairseqDataset):
         return mask
 
     # define class variable
-    train_mle_probs = read_mle_probs.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/mle-prob.train")
-    val_mle_probs = read_mle_probs.__func__("/home/ml/cadencao/XSum/fairseq_files/xsum-bin/mle-prob.val")
+    train_mle_probs = read_mle_probs.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.train")
+    val_mle_probs = read_mle_probs.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.val")
 
     def __init__(
         self,
