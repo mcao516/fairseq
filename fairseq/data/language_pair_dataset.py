@@ -81,6 +81,7 @@ def collate(
 
     prev_output_tokens = None
     target = None
+    tgt_lengths = None
     if samples[0].get("target", None) is not None:
         target = merge(
             "target",
@@ -131,6 +132,7 @@ def collate(
             "src_lengths": src_lengths,
         },
         "target": target,
+        "tgt_lengths": tgt_lengths,
         "p_mle": p_mle
     }
 

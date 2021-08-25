@@ -6,6 +6,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
@@ -38,6 +39,156 @@ def label_smoothed_nll_loss(lprobs, target, probs, epsilon, ignore_index=None, r
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
 
     return loss, nll_loss
+
+
+def sequence_mask(lengths, max_len=None, dtype=None, device=None) :
+    r"""Return a mask tensor representing the first N positions of each cell.
+    If ``lengths`` has shape ``[d_1, d_2, ..., d_n]`` the resulting tensor
+    ``mask`` has dtype ``dtype`` and shape ``[d_1, d_2, ..., d_n, maxlen]``,
+    with
+    ```
+    mask[i_1, i_2, ..., i_n, j] = (j < lengths[i_1, i_2, ..., i_n])
+    ```
+    Examples:
+    ```python
+    sequence_mask([1, 3, 2], 5)  # [[True, False, False, False, False],
+                                 #  [True,  True,  True, False, False],
+                                 #  [True,  True, False, False, False]]
+    sequence_mask([[1, 3],[2,0]])  # [[[ True, False, False],
+                                   #   [ True,  True,  True]],
+                                   #  [[ True,  True, False],
+                                   #   [False, False, False]]]
+    ```
+    Args:
+        lengths: integer tensor or list of int, all its values <= max_len.
+        max_len: scalar integer tensor, size of last dimension of returned
+            tensor. Default is the maximum value in ``lengths``.
+        dtype: the desired data type of returned tensor. Default: if None,
+            returns :torch:`ByteTensor`.
+        device: the desired device of returned tensor. Default: if None, uses
+            the current device for the default tensor type.
+    Returns:
+        A mask tensor of shape :python:`lengths.shape + (max_len,)`, cast to
+        specified dtype.
+    Raises:
+        ValueError: if ``max_len`` is not a scalar.
+    """
+    if not isinstance(lengths, torch.Tensor):
+        lengths = torch.tensor(lengths, device=device)
+    elif device is None:
+        device = lengths.device
+    lengths: torch.LongTensor
+    if max_len is None:
+        max_len = torch.max(lengths).item()
+
+    size = lengths.size()
+    row_vector = torch.arange(max_len, device=device, dtype=lengths.dtype).view(
+        *([1] * len(size)), -1).expand(*size, max_len)
+    mask = (row_vector < lengths.unsqueeze(-1)).to(device=device)
+    if dtype is not None:
+        mask = mask.to(dtype=dtype)
+
+    return mask
+
+
+def masked_reverse_cumsum(X, lengths, dim):
+    masked_X = X * sequence_mask(lengths, max_len=X.shape[1])
+    return (masked_X
+            .flip(dims=[dim])
+            .cumsum(dim=dim)
+            .flip(dims=[dim]))
+
+
+def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
+    """
+    Single-step unified path consistency learning (PCL). 
+    
+    See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.15).
+
+    Args:
+        logits: [batch_size, tgt_len, vocab_size]
+        logits_: [batch_size, tgt_len, vocab_size]
+        actions: [batch_size, tgt_len]
+        rewards: [batch_size]
+        seq_lens: [batch_size]
+    
+    """
+    # calculate policy pi, which equals the advantage function
+    if logits.dim() == actions.dim() + 1:
+        actions = actions.unsqueeze(-1)
+    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
+    V = logits.logsumexp(dim=-1)
+    A = Q - V
+    
+    # calculate V(s_t+1) + r_t - V(s_t)
+    A_ = torch.zeros_like(Q)
+    V_ = logits_.logsumexp(dim=-1)
+    A_[:, :-1] = V_[:, 1:] - V_[:, :-1]
+    
+    terminal_V_ = V_[
+        torch.arange(seq_lens.shape[0]),
+        seq_lens - 1]  # terminal_V_: [batch_size]
+
+    A_[torch.arange(seq_lens.shape[0]),
+       seq_lens - 1] = rewards - terminal_V_
+    
+    raw_losses = F.mse_loss(A, A_, reduction="none")
+    return raw_losses
+
+
+def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
+    """
+    Multi-step unified path consistency learning (PCL). 
+    
+    See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.17).
+
+    Args:
+        logits: [batch_size, tgt_len, vocab_size]
+        logits_: [batch_size, tgt_len, vocab_size]
+        actions: [batch_size, tgt_len]
+        rewards: [batch_size]
+        seq_lens: [batch_size]
+    
+    """
+    if logits.dim() == actions.dim() + 1:
+        actions = actions.unsqueeze(-1)
+
+    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
+    V = logits.logsumexp(dim=-1)
+    A = Q - V
+
+    # Target outputs
+    V_ = logits_.logsumexp(dim=-1)
+    A2 = masked_reverse_cumsum(
+        A,
+        lengths=seq_lens,
+        dim=-1)
+
+    raw_losses = F.mse_loss(
+        A2, rewards.view(-1, 1) - V_,
+        reduction="none")
+    return raw_losses
+
+
+def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True):
+    """
+    A mix of single- and multi-step PCL update.
+
+    """
+    s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+    m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+    raw_losses = (s_pcl + m_pcl) / 2
+    assert raw_losses.shape == actions.shape, "Losses shape does not match: {}".format(raw_losses.shape)
+
+    # mask & reduce
+    if ignore_index is not None:
+        pad_mask = actions.eq(ignore_index)
+        raw_losses.masked_fill_(pad_mask, 0.0)
+
+    if reduce:
+        raw_losses = raw_losses.sum()
+    
+    return raw_losses
 
 
 @register_criterion("label_smoothed_cross_entropy")
@@ -97,7 +248,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         with torch.no_grad():
             tgt_output = tgt_model(**sample["net_input"])
 
-        loss, nll_loss = self.compute_loss(
+        loss = self.compute_loss(
             model,
             net_output,
             sample,
@@ -110,7 +261,6 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         )
         logging_output = {
             "loss": loss.data,
-            "nll_loss": nll_loss.data,
             "ntokens": sample["ntokens"],
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
@@ -148,26 +298,33 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             tgt_output=None,
             reduce=True
         ):
-        lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
-        probs = self.get_probs(model, net_output)
-
-        tgt_probs = self.get_probs(tgt_model, tgt_output).detach()
-        assert lprobs.shape == probs.shape == tgt_probs.shape
+        """
+        Args:
+            net_output (tuple):
+                - the decoder's output of shape `(batch, tgt_len, vocab)`
+                - a dictionary with any model-specific outputs
+        """
+        target = model.get_targets(sample, net_output)  # target: [batch_size, max_tgt_len]
 
         p_mle = None
         if sample.get('p_mle', None) is not None:
-            p_mle = sample['p_mle'].view(-1)
+            p_mle = sample['p_mle']
             assert target.size() == p_mle.size(), "Target size: {}; P_MLE size: {}.".format(target.size(), p_mle.size())
 
-        loss, nll_loss = label_smoothed_nll_loss(
-            lprobs,
+        rewards = torch.tensor([1.] * target.shape[0]).to(target.device)
+        if net_output[0].dtype == torch.float16:
+            rewards = rewards.half()
+
+        loss = mixed_PCL_loss(
+            net_output[0],
+            tgt_output[0],
             target,
-            probs,
-            self.eps,
+            rewards,
+            sample['tgt_lengths'],
             ignore_index=self.padding_idx,
             reduce=reduce,
         )
-        return loss, nll_loss
+        return loss
 
     def compute_accuracy(self, model, net_output, sample):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
