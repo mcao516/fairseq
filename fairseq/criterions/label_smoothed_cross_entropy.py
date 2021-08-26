@@ -186,7 +186,7 @@ def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=Non
         raw_losses.masked_fill_(pad_mask, 0.0)
 
     if reduce:
-        raw_losses = raw_losses.sum()
+        raw_losses = raw_losses.mean()
     
     return raw_losses
 

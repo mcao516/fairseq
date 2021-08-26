@@ -346,8 +346,8 @@ class TranslationTask(LegacyFairseqTask):
             )
         return model
 
-    def valid_step(self, sample, model, regularizer, criterion):
-        loss, sample_size, logging_output = super().valid_step(sample, model, regularizer, criterion)
+    def valid_step(self, sample, model, tgt_model, criterion):
+        loss, sample_size, logging_output = super().valid_step(sample, model, tgt_model, criterion)
         if self.args.eval_bleu:
             bleu = self._inference_with_bleu(self.sequence_generator, sample, model)
             logging_output["_bleu_sys_len"] = bleu.sys_len

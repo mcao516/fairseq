@@ -753,6 +753,7 @@ class Trainer(object):
                     self.task.train_step(
                         sample,
                         self.model,
+                        self.tgt_model,
                         self.criterion,
                         self.optimizer,
                         self.get_num_updates(),
