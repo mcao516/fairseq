@@ -65,6 +65,7 @@ class SequenceGenerator(nn.Module):
         self.tgt_dict = tgt_dict
         self.pad = tgt_dict.pad()
         self.unk = tgt_dict.unk()
+        self.bos = tgt_dict.bos()
         self.eos = tgt_dict.eos() if eos is None else eos
         self.symbols_to_strip_from_output = (
             symbols_to_strip_from_output.union({self.eos})
@@ -180,7 +181,8 @@ class SequenceGenerator(nn.Module):
         sample: Dict[str, Dict[str, Tensor]],
         prefix_tokens: Optional[Tensor] = None,
         constraints: Optional[Tensor] = None,
-        bos_token: Optional[int] = None,
+        fix_xsum_bug: Optional[bool] = False,
+        bos_token: Optional[int] = None
     ):
         incremental_states = torch.jit.annotate(
             List[Dict[str, Dict[str, Optional[Tensor]]]],
@@ -328,6 +330,12 @@ class SequenceGenerator(nn.Module):
             lprobs[:, self.pad] = -math.inf  # never select pad
             lprobs[:, self.unk] -= self.unk_penalty  # apply unk penalty
 
+            if fix_xsum_bug:
+                if step == 0:
+                    lprobs[:, self.bos] = 1000
+                else:
+                    lprobs[:, self.bos] = -math.inf
+            
             # handle max length constraint
             if step >= max_len:
                 lprobs[:, : self.eos] = -math.inf
