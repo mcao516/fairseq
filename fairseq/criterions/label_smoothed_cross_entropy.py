@@ -136,6 +136,35 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     return raw_losses
 
 
+def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens):
+
+    # calculate policy pi, which equals the advantage function
+    if logits.dim() == actions.dim() + 1:
+        actions = actions.unsqueeze(-1)
+    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
+    V = logits.logsumexp(dim=-1)
+    A = Q - V
+    
+    # calculate V(s_t+1) + r_t - V(s_t)
+    A_ = torch.zeros_like(Q)
+    V_ = logits_.logsumexp(dim=-1)
+    A_[:, :-1] = V_[:, 1:] - V_[:, :-1] + rewards[:, :-1]
+    
+    terminal_V_ = V_[
+        torch.arange(seq_lens.shape[0]),
+        seq_lens - 1]  # terminal_V_: [batch_size]
+
+    terminal_R = rewards[
+        torch.arange(seq_lens.shape[0]),
+        seq_lens - 1]
+
+    A_[torch.arange(seq_lens.shape[0]),
+       seq_lens - 1] = terminal_R - terminal_V_
+    
+    raw_losses = F.mse_loss(A, A_, reduction="none")
+    return raw_losses
+
+
 def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     """
     Multi-step unified path consistency learning (PCL). 
@@ -170,13 +199,48 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     return raw_losses
 
 
+def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens):
+
+    if logits.dim() == actions.dim() + 1:
+        actions = actions.unsqueeze(-1)
+
+    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
+    V = logits.logsumexp(dim=-1)
+    A = Q - V
+
+    A2 = masked_reverse_cumsum(
+        A,
+        lengths=seq_lens,
+        dim=-1)
+
+    V_ = logits_.logsumexp(dim=-1)
+    R = masked_reverse_cumsum(
+        rewards,
+        lengths=seq_lens,
+        dim=-1)
+
+    raw_losses = F.mse_loss(
+        A2, R - V_,
+        reduction="none")
+    return raw_losses
+
+
 def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True):
     """
     A mix of single- and multi-step PCL update.
 
     """
-    s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
-    m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+    if rewards.dim() == 1:
+        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+
+    elif rewards.dim() == 2:
+        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens)
+        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens)
+
+    else:
+        raise Exception("Rewards shape does NOT seems right: {}.".format(rewards.shape))
+
     raw_losses = (s_pcl + m_pcl) / 2
     assert raw_losses.shape == actions.shape, "Losses shape does not match: {}".format(raw_losses.shape)
 
@@ -311,8 +375,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             p_mle = sample['p_mle']
             assert target.size() == p_mle.size(), "Target size: {}; P_MLE size: {}.".format(target.size(), p_mle.size())
 
-        rewards = torch.tensor([1.] * target.shape[0]).to(target.device)
-        if net_output[0].dtype == torch.float16:
+        # rewards = p_mle.sum(dim=-1)
+        rewards = p_mle
+        if rewards.dtype != net_output[0].dtype and net_output[0].dtype == torch.float16:
             rewards = rewards.half()
 
         loss = mixed_PCL_loss(
