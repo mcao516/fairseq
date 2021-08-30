@@ -183,7 +183,9 @@ class SequenceGenerator(nn.Module):
         constraints: Optional[Tensor] = None,
         fix_xsum_bug: Optional[bool] = False,
         bos_token: Optional[int] = None
-    ):
+    ):  
+        bos_token = None if not fix_xsum_bug else bos_token
+        
         incremental_states = torch.jit.annotate(
             List[Dict[str, Dict[str, Optional[Tensor]]]],
             [
@@ -336,7 +338,7 @@ class SequenceGenerator(nn.Module):
                 else:
                     lprobs[:, self.bos] = -math.inf
             
-            # handle max length constraint
+            # handle max length constraint (self.eos: 2)
             if step >= max_len:
                 lprobs[:, : self.eos] = -math.inf
                 lprobs[:, self.eos + 1 :] = -math.inf
