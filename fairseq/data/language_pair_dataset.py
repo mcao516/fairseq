@@ -220,19 +220,19 @@ class LanguagePairDataset(FairseqDataset):
              of the samples.
     """
     @staticmethod
-    def read_mle_probs(mask_path):
-        assert path.exists(mask_path), "MLE posterior file does not exist: {}".format(mask_path)
-        mask = []
-        with open(mask_path, 'r') as f:
+    def read_rewards(file_path):
+        assert path.exists(file_path), "Reward file does not exist: {}".format(file_path)
+        rewards = []
+        with open(file_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                mask.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
-        logger.warning("MLE posterior probabilities loaded (size={}).".format(len(mask)))
-        return mask
+                rewards.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
+        logger.warning("Rewards loaded (size={}).".format(len(rewards)))
+        return rewards
 
     # define class variable
-    train_mle_probs = read_mle_probs.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.train")
-    val_mle_probs = read_mle_probs.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.val")
+    train_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.train")
+    val_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.val")
 
     def __init__(
         self,
@@ -363,12 +363,12 @@ class LanguagePairDataset(FairseqDataset):
             "target": tgt_item
         }
         if self.tgt is not None:
-            assert self.train_mle_probs is not None and self.val_mle_probs is not None
+            assert self.train_rewards is not None and self.val_rewards is not None
             
-            if len(self.tgt) == len(self.train_mle_probs):
-                p_mle = self.train_mle_probs
-            elif len(self.tgt) == len(self.val_mle_probs):
-                p_mle = self.val_mle_probs
+            if len(self.tgt) == len(self.train_rewards):
+                p_mle = self.train_rewards
+            elif len(self.tgt) == len(self.val_rewards):
+                p_mle = self.val_rewards
             else:
                 raise Exception("Something wrong with p_mle's size!")
 
