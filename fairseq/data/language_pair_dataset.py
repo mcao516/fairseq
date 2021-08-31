@@ -112,16 +112,24 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    p_mle = None
-    if samples[0].get('p_mle', None) is not None:
-        p_mle = merge(
-            'p_mle',
-            left_pad=left_pad_target,
-            pad_to_length=pad_to_length["target"]
-            if pad_to_length is not None
-            else None,
-        )
-        p_mle = p_mle.index_select(0, sort_order)
+    rewards = None
+    if samples[0].get('reward', None) is not None:
+        if samples[0]['reward'].shape[0] == 1:
+            rewards_ = []
+            for s in samples:
+                assert s['reward'].dim() == 1 and s['reward'].shape[0] == 1
+                rewards_.append(s['reward'])
+            rewards = torch.cat(rewards_)
+            assert rewards.shape[0] == len(samples)
+        else:
+            rewards = merge(
+                'reward',
+                left_pad=left_pad_target,
+                pad_to_length=pad_to_length["target"]
+                if pad_to_length is not None
+                else None,
+            )
+            rewards = rewards.index_select(0, sort_order)
 
     batch = {
         "id": id,
@@ -133,7 +141,7 @@ def collate(
         },
         "target": target,
         "tgt_lengths": tgt_lengths,
-        "p_mle": p_mle
+        "rewards": rewards
     }
 
     if prev_output_tokens is not None:
@@ -366,14 +374,15 @@ class LanguagePairDataset(FairseqDataset):
             assert self.train_rewards is not None and self.val_rewards is not None
             
             if len(self.tgt) == len(self.train_rewards):
-                p_mle = self.train_rewards
+                rewards = self.train_rewards
             elif len(self.tgt) == len(self.val_rewards):
-                p_mle = self.val_rewards
+                rewards = self.val_rewards
             else:
-                raise Exception("Something wrong with p_mle's size!")
+                raise Exception("Something wrong with rewards size!")
 
-            example['p_mle'] = p_mle[index]
-            assert tgt_item.size() == p_mle[index].size()
+            example['reward'] = rewards[index]
+            assert tgt_item.size() == rewards[index].size() or \
+                (rewards[index].dim() == 1 and rewards[index].shape[0] == 1)
 
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]

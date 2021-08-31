@@ -17,7 +17,6 @@ def label_smoothed_nll_loss(lprobs, target, probs, epsilon, ignore_index=None, r
         lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
         target (Tensor): [batch_size * max_tgt_len]
         probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-        p_mle (Tensor): [batch_size * max_tgt_len]
         
     """
     if target.dim() == lprobs.dim() - 1:
@@ -304,6 +303,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                     'prev_output_tokens' (Tensor): [batch_size, max_tgt_len], 
                 }, 
                 'target' (Tensor): [batch_size, max_tgt_len]
+                'rewards' (Tensor): [batch_size, max_tgt_len] or [batch_size]
             }
             net_output (Tensor): [batch_size, max_tgt_len, vocab_size]
         
@@ -370,13 +370,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         """
         target = model.get_targets(sample, net_output)  # target: [batch_size, max_tgt_len]
 
-        p_mle = None
-        if sample.get('p_mle', None) is not None:
-            p_mle = sample['p_mle']
-            assert target.size() == p_mle.size(), "Target size: {}; P_MLE size: {}.".format(target.size(), p_mle.size())
+        rewards = None
+        if sample.get('rewards', None) is not None:
+            rewards = sample['rewards']
+            assert rewards.shape[0] == target.shape[0] and \
+                (rewards.dim() == 1 or rewards.shape[1] == target.shape[1]), \
+                "Target size: {}; rewards size: {}.".format(target.size(), rewards.size())
 
-        # rewards = p_mle.sum(dim=-1)
-        rewards = p_mle
+        # rewards = rewards.sum(dim=-1)
         if rewards.dtype != net_output[0].dtype and net_output[0].dtype == torch.float16:
             rewards = rewards.half()
 
