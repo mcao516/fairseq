@@ -98,6 +98,19 @@ def masked_reverse_cumsum(X, lengths, dim):
             .flip(dims=[dim]))
 
 
+def get_reward_shaping_func(
+    old_min: float,
+    old_max: float,
+    new_min: float,
+    new_max: float
+):
+    def _shaping_func(rewards):
+        percentile = (rewards - old_min) / (old_max - old_min)
+        return percentile * (new_max - new_min) + new_min
+
+    return _shaping_func
+
+
 def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     """
     Single-step unified path consistency learning (PCL). 
@@ -263,12 +276,26 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         label_smoothing,
         ignore_prefix_size=0,
         report_accuracy=False,
+        reward_shaping=False,
+        old_r_min=0.,
+        old_r_max=1.0,
+        new_r_min=-0.5,
+        new_r_max=0.5,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+
+        if reward_shaping:
+            self._reward_shaping_func = get_reward_shaping_func(
+                old_min=old_r_min,
+                old_max=old_r_max,
+                new_min=new_r_min,
+                new_max=new_r_max)
+        else:
+            self._reward_shaping_func = lambda r: r
 
     @staticmethod
     def add_args(parser):
@@ -280,6 +307,16 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='report accuracy metric')
         parser.add_argument('--ignore-prefix-size', default=0, type=int,
                             help='Ignore first N tokens')
+        parser.add_argument('--reward-shaping', action='store_true',
+                            help='Whether use reward shaping')
+        parser.add_argument('--old-r-min', default=0., type=float,
+                            help='Original minimum reward value')
+        parser.add_argument('--old-r-max', default=1.0, type=float,
+                            help='Original maximum reward value')
+        parser.add_argument('--new-r-min', default=-0.5, type=float,
+                            help='Minimum reward value after reshaping')
+        parser.add_argument('--new-r-max', default=0.5, type=float,
+                            help='Maximum reward value after reshaping')
         # fmt: on
 
     def forward(self, model, tgt_model, sample, reduce=True):
@@ -377,7 +414,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 (rewards.dim() == 1 or rewards.shape[1] == target.shape[1]), \
                 "Target size: {}; rewards size: {}.".format(target.size(), rewards.size())
 
-        # rewards = rewards.sum(dim=-1)
+        rewards = self._reward_shaping_func(rewards)
         if rewards.dtype != net_output[0].dtype and net_output[0].dtype == torch.float16:
             rewards = rewards.half()
 
