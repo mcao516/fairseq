@@ -1,6 +1,13 @@
 # JetBrains PyCharm IDE
 .idea/
 
+# Visual Studio Code
+.vscode/
+
+# logs & predictions
+logs/
+preds/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
