@@ -428,14 +428,6 @@ class DatasetConfig(FairseqDataclass):
     shard_id: int = field(
         default=0, metadata={"help": "id of the shard to generate (id < num_shards)"}
     )
-    train_rewards: str = field(
-        default="rouge.train",
-        metadata={"help": "training set rewards"},
-    )
-    val_rewards: str = field(
-        default="rouge.val",
-        metadata={"help": "validation set rewards"},
-    )
 
 
 @dataclass

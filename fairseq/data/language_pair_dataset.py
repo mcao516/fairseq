@@ -7,7 +7,6 @@ import logging
 
 import numpy as np
 import torch
-from os import path
 from fairseq.data import FairseqDataset, data_utils
 
 
@@ -227,20 +226,6 @@ class LanguagePairDataset(FairseqDataset):
             will contain a field 'tgt_lang_id' which indicates the target language
              of the samples.
     """
-    # @staticmethod
-    # def read_rewards(file_path):
-    #     assert path.exists(file_path), "Reward file does not exist: {}".format(file_path)
-    #     rewards = []
-    #     with open(file_path, 'r') as f:
-    #         for line in f:
-    #             line = line.strip()
-    #             rewards.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
-    #     logger.warning("Rewards loaded (size={}).".format(len(rewards)))
-    #     return rewards
-
-    # # define class variable
-    # train_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/tmp_files/xsum-bin/rouge-rewards/rouge.train")
-    # val_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/tmp_files/xsum-bin/rouge-rewards/rouge.val")
 
     def __init__(
         self,
@@ -263,12 +248,10 @@ class LanguagePairDataset(FairseqDataset):
         num_buckets=0,
         src_lang_id=None,
         tgt_lang_id=None,
-        pad_to_multiple=1
+        pad_to_multiple=1,
+        train_rewards=None,
+        valid_rewards=None
     ):
-        if tgt is not None:
-            from fairseq_cli.train import train_rewards, val_rewards
-            self.train_rewards, self.val_rewards = train_rewards, val_rewards
-
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
             assert src_dict.eos() == tgt_dict.eos()
@@ -279,6 +262,8 @@ class LanguagePairDataset(FairseqDataset):
             ), "Source and target must contain the same number of examples"
         self.src = src
         self.tgt = tgt
+        self.train_rewards = train_rewards
+        self.val_rewards = valid_rewards
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.sizes = (

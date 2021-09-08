@@ -7,6 +7,7 @@ import itertools
 import json
 import logging
 import os
+from os import path
 from argparse import Namespace
 
 import numpy as np
@@ -31,6 +32,17 @@ EVAL_BLEU_ORDER = 4
 logger = logging.getLogger(__name__)
 
 
+def read_rewards(file_path):
+    assert path.exists(file_path), "Reward file does not exist: {}".format(file_path)
+    rewards = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            rewards.append([float(i) for i in line.split()])
+    logger.warning("Rewards loaded (size={}).".format(len(rewards)))
+    return rewards
+
+
 def load_langpair_dataset(
     data_path,
     split,
@@ -52,6 +64,8 @@ def load_langpair_dataset(
     num_buckets=0,
     shuffle=True,
     pad_to_multiple=1,
+    train_reward_path=None,
+    valid_reward_path=None
 ):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
@@ -145,6 +159,12 @@ def load_langpair_dataset(
             )
     # ========================================================================= #
 
+    train_rewards, valid_rewards = None, None
+    if train_reward_path is not None:
+        train_rewards = read_rewards(train_reward_path)
+    if valid_reward_path is not None:
+        valid_rewards = read_rewards(valid_reward_path)
+
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
         src_dataset,
@@ -159,7 +179,9 @@ def load_langpair_dataset(
         eos=eos,
         num_buckets=num_buckets,
         shuffle=shuffle,
-        pad_to_multiple=pad_to_multiple
+        pad_to_multiple=pad_to_multiple,
+        train_rewards=train_rewards,
+        valid_rewards=valid_rewards
     )
 
 
@@ -215,6 +237,10 @@ class TranslationTask(LegacyFairseqTask):
                             help='if >0, then bucket source and target lengths into N '
                                  'buckets and pad accordingly; this is useful on TPUs '
                                  'to minimize the number of compilations')
+        parser.add_argument('--train-rewards', type=str,
+                            help='training set rewards')
+        parser.add_argument('--valid-rewards', type=str,
+                            help='validation set rewards')
 
         # options for reporting BLEU during validation
         parser.add_argument('--eval-bleu', action='store_true',
@@ -314,6 +340,8 @@ class TranslationTask(LegacyFairseqTask):
             num_buckets=self.args.num_batch_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.args.required_seq_len_multiple,
+            train_reward_path=self.args.train_rewards,
+            valid_reward_path=self.args.valid_rewards
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):

@@ -60,22 +60,6 @@ def main(cfg: DictConfig) -> None:
     if distributed_utils.is_master(cfg.distributed_training):
         checkpoint_utils.verify_checkpoint_directory(cfg.checkpoint.save_dir)
 
-    def read_rewards(file_path):
-        assert path.exists(file_path), "Reward file does not exist: {}".format(file_path)
-        rewards = []
-        with open(file_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # rewards.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
-                rewards.append([float(i) for i in line.split()])
-        logger.warning("Rewards loaded (size={}).".format(len(rewards)))
-        return rewards
-    
-    # define global variable
-    global train_rewards, val_rewards
-    train_rewards = read_rewards(cfg.dataset.train_rewards)
-    val_rewards = read_rewards(cfg.dataset.val_rewards)
-
     # Print args
     logger.info(cfg)
 
