@@ -239,8 +239,8 @@ class LanguagePairDataset(FairseqDataset):
         return rewards
 
     # define class variable
-    train_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.train")
-    val_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/xsum-bin/mle-probs/mle-prob.val")
+    train_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/tmp_files/xsum-bin/rouge-rewards/rouge.train")
+    val_rewards = read_rewards.__func__("/home/mcao610/scratch/summarization/XSum/tmp_files/xsum-bin/rouge-rewards/rouge.val")
 
     def __init__(
         self,

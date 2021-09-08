@@ -122,7 +122,16 @@ def main(cfg: DictConfig) -> None:
     )
 
     # load target model
-    _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
+    if (
+        cfg.checkpoint.restore_file == "checkpoint_last.pt"
+    ):  # default value of restore_file is 'checkpoint_last.pt'
+        suffix = cfg.checkpoint.checkpoint_suffix
+        checkpoint_path = os.path.join(
+            cfg.checkpoint.save_dir, "checkpoint_last{}.pt".format(suffix)
+        )
+        _ = trainer.load_tgt_checkpoint(checkpoint_path)
+    else:
+        _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
 
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
