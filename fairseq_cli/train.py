@@ -66,7 +66,8 @@ def main(cfg: DictConfig) -> None:
         with open(file_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                rewards.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
+                # rewards.append(torch.tensor([float(i) for i in line.split()], dtype=torch.float))
+                rewards.append([float(i) for i in line.split()])
         logger.warning("Rewards loaded (size={}).".format(len(rewards)))
         return rewards
     

@@ -384,9 +384,9 @@ class LanguagePairDataset(FairseqDataset):
             else:
                 raise Exception("Something wrong with rewards size!")
 
-            example['reward'] = rewards[index]
-            assert tgt_item.size() == rewards[index].size() or \
-                (rewards[index].dim() == 1 and rewards[index].shape[0] == 1)
+            example['reward'] = torch.tensor(rewards[index])
+            assert tgt_item.size() == example['reward'].size() or \
+                (example['reward'].dim() == 1 and example['reward'].shape[0] == 1)
 
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
