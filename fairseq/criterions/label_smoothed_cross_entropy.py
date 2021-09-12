@@ -11,6 +11,93 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 
+def transpose_batch_time(inputs):
+    r"""Transposes inputs between time-major and batch-major.
+    """
+    return inputs.transpose(0, 1)
+
+
+def mask_sequences(
+    sequence,
+    sequence_length,
+    dtype=None,
+    time_major=False
+):
+    if not torch.is_tensor(sequence):
+        sequence = torch.tensor(sequence, dtype=dtype)
+    sequence: torch.Tensor
+
+    rank = sequence.dim()
+    if rank < 2:
+        raise ValueError("`sequence` must be 2D or higher order.")
+
+    if time_major:
+        sequence = transpose_batch_time(sequence)
+    max_time = sequence.size(1)
+    if dtype is None:
+        dtype = sequence.dtype
+    mask = sequence_mask(sequence_length, max_time, dtype=dtype)
+    mask = mask.view(*mask.size(), *([1] * (rank - 2)))
+    sequence = sequence * mask
+    if time_major:
+        sequence = transpose_batch_time(sequence)
+
+    return sequence
+
+
+def reduce_batch_time(
+    sequence,
+    sequence_length,
+    average_across_batch=True,
+    average_across_timesteps=False,
+    sum_over_batch=False,
+    sum_over_timesteps=True
+):
+    if average_across_timesteps and sum_over_timesteps:
+        raise ValueError("Only one of `average_across_timesteps` and "
+                         "`sum_over_timesteps` can be set.")
+    if average_across_batch and sum_over_batch:
+        raise ValueError("Only one of `average_across_batch` and "
+                         "`sum_over_batch` can be set.")
+
+    if sum_over_timesteps:
+        sequence = torch.sum(sequence, dim=1)
+    elif average_across_timesteps:
+        if sequence_length is None:
+            sequence = torch.mean(sequence, dim=1)
+        else:
+            sequence = (torch.sum(sequence, dim=1).float() /
+                        sequence_length.float())
+
+    if sum_over_batch:
+        sequence = torch.sum(sequence, dim=0)
+    elif average_across_batch:
+        sequence = torch.mean(sequence, dim=0)
+
+    return sequence
+
+
+def mask_and_reduce(
+    sequence,
+    sequence_length,
+    average_across_batch=True,
+    average_across_timesteps=False,
+    sum_over_batch=False,
+    sum_over_timesteps=True,
+):
+    sequence = mask_sequences(sequence,
+                              sequence_length,
+                              dtype=None,
+                              time_major=False)
+
+    return reduce_batch_time(sequence,
+                             sequence_length,
+                             average_across_batch,
+                             average_across_timesteps,
+                             sum_over_batch,
+                             sum_over_timesteps)
+
+
 def label_smoothed_nll_loss(lprobs, target, probs, epsilon, ignore_index=None, reduce=True):
     """
     Args:
@@ -149,7 +236,6 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
 
 
 def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens):
-
     # calculate policy pi, which equals the advantage function
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
@@ -197,13 +283,10 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = logits.logsumexp(dim=-1)
     A = Q - V
+    A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
 
     # Target outputs
     V_ = logits_.logsumexp(dim=-1)
-    A2 = masked_reverse_cumsum(
-        A,
-        lengths=seq_lens,
-        dim=-1)
 
     raw_losses = F.mse_loss(
         A2, rewards.view(-1, 1) - V_,
@@ -219,7 +302,6 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = logits.logsumexp(dim=-1)
     A = Q - V
-
     A2 = masked_reverse_cumsum(
         A,
         lengths=seq_lens,
@@ -231,6 +313,7 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
         lengths=seq_lens,
         dim=-1)
 
+    assert R.shape == V_.shape
     raw_losses = F.mse_loss(
         A2, R - V_,
         reduction="none")
@@ -256,15 +339,24 @@ def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=Non
     raw_losses = (s_pcl + m_pcl) / 2
     assert raw_losses.shape == actions.shape, "Losses shape does not match: {}".format(raw_losses.shape)
 
-    # mask & reduce
-    if ignore_index is not None:
-        pad_mask = actions.eq(ignore_index)
-        raw_losses.masked_fill_(pad_mask, 0.0)
+    loss = mask_and_reduce(
+        sequence=raw_losses,
+        sequence_length=seq_lens,
+        average_across_batch=True,
+        average_across_timesteps=True,
+        sum_over_batch=False,
+        sum_over_timesteps=False
+    )
 
-    if reduce:
-        raw_losses = raw_losses.mean()
+    # mask & reduce
+    # if ignore_index is not None:
+    #     pad_mask = actions.eq(ignore_index)
+    #     raw_losses.masked_fill_(pad_mask, 0.0)
+
+    # if reduce:
+    #     loss = raw_losses.mean()
     
-    return raw_losses
+    return loss
 
 
 @register_criterion("label_smoothed_cross_entropy")
