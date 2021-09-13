@@ -39,7 +39,7 @@ def read_rewards(file_path):
         for line in f:
             line = line.strip()
             rewards.append([float(i) for i in line.split()])
-    logger.warning("Rewards loaded (size={})".format(len(rewards)))
+    logger.warning("Rewards loaded from: {} (size={})".format(file_path, len(rewards)))
     return rewards
 
 
