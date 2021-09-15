@@ -198,7 +198,7 @@ def get_reward_shaping_func(
     return _shaping_func
 
 
-def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
+def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, alpha=1.0):
     """
     Single-step unified path consistency learning (PCL). 
     
@@ -231,17 +231,17 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     A_[torch.arange(seq_lens.shape[0]),
        seq_lens - 1] = rewards - terminal_V_
     
-    raw_losses = F.mse_loss(A, A_, reduction="none")
+    raw_losses = F.mse_loss(alpha * A, A_, reduction="none")
     return raw_losses
 
 
-def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens):
+def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, alpha=1.0):
     # calculate policy pi, which equals the advantage function
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = logits.logsumexp(dim=-1)
-    A = Q - V
+    A = Q - V  # [batch_size, tgt_len]
     
     # calculate V(s_t+1) + r_t - V(s_t)
     A_ = torch.zeros_like(Q)
@@ -259,11 +259,11 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     A_[torch.arange(seq_lens.shape[0]),
        seq_lens - 1] = terminal_R - terminal_V_
     
-    raw_losses = F.mse_loss(A, A_, reduction="none")
+    raw_losses = F.mse_loss(alpha * A, A_, reduction="none")
     return raw_losses
 
 
-def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
+def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, alpha=1.0):
     """
     Multi-step unified path consistency learning (PCL). 
     
@@ -289,12 +289,12 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens):
     V_ = logits_.logsumexp(dim=-1)
 
     raw_losses = F.mse_loss(
-        A2, rewards.view(-1, 1) - V_,
+        alpha * A2, rewards.view(-1, 1) - V_,
         reduction="none")
     return raw_losses
 
 
-def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens):
+def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, alpha=1.0):
 
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
@@ -315,23 +315,23 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
 
     assert R.shape == V_.shape
     raw_losses = F.mse_loss(
-        A2, R - V_,
+        alpha * A2, R - V_,
         reduction="none")
     return raw_losses
 
 
-def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True):
+def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True, alpha=1.0):
     """
     A mix of single- and multi-step PCL update.
 
     """
     if rewards.dim() == 1:
-        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
-        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens)
+        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, alpha=alpha)
+        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, alpha=alpha)
 
     elif rewards.dim() == 2:
-        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens)
-        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens)
+        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, alpha=alpha)
+        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, alpha=alpha)
 
     else:
         raise Exception("Rewards shape does NOT seems right: {}.".format(rewards.shape))
@@ -373,12 +373,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         old_r_max=1.0,
         new_r_min=-0.5,
         new_r_max=0.5,
+        alpha_pcl=1.0,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+        self.alpha = alpha_pcl
 
         if reward_shaping:
             self._reward_shaping_func = get_reward_shaping_func(
@@ -409,6 +411,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='Minimum reward value after reshaping')
         parser.add_argument('--new-r-max', default=0.5, type=float,
                             help='Maximum reward value after reshaping')
+        parser.add_argument('--alpha-pcl', default=1.0, type=float,
+                            help='Shannon entropy coefficient in PCL')
         # fmt: on
 
     def forward(self, model, tgt_model, sample, reduce=True):
@@ -518,6 +522,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             sample['tgt_lengths'],
             ignore_index=self.padding_idx,
             reduce=reduce,
+            alpha=self.alpha
         )
         return loss
 
