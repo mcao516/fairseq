@@ -123,17 +123,22 @@ def main(cfg: DictConfig) -> None:
     )
 
     # load target model
-    if (
-        cfg.checkpoint.restore_file == "checkpoint_last.pt"
-    ):  # default value of restore_file is 'checkpoint_last.pt'
-        suffix = cfg.checkpoint.checkpoint_suffix
-        checkpoint_path = os.path.join(
-            cfg.checkpoint.save_dir, "checkpoint_last{}.pt".format(suffix)
-        )
-        _ = trainer.load_tgt_checkpoint(checkpoint_path)
+    if cfg.checkpoint.restore_tgt_file is not None:
+        tgt_restore_path = cfg.checkpoint.restore_tgt_file
+        _ = trainer.load_tgt_checkpoint(tgt_restore_path)
     else:
-        _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
+        if (
+            cfg.checkpoint.restore_file == "checkpoint_last.pt"
+        ):  # default value of restore_file is 'checkpoint_last.pt'
+            suffix = cfg.checkpoint.checkpoint_suffix
+            checkpoint_path = os.path.join(
+                cfg.checkpoint.save_dir, "checkpoint_last{}.pt".format(suffix)
+            )
+            _ = trainer.load_tgt_checkpoint(checkpoint_path)
+        else:
+            _ = trainer.load_tgt_checkpoint(cfg.checkpoint.restore_file)
 
+    # Start training
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
     train_meter = meters.StopwatchMeter()
@@ -330,6 +335,10 @@ def validate_and_save(
         checkpoint_utils.save_checkpoint(
             cfg.checkpoint, trainer, epoch_itr, valid_losses[0]
         )
+
+        # Save target checkpoint
+        if cfg.checkpoint.save_target_path is not None:
+            trainer.save_target_checkpoint(cfg.checkpoint.save_target_path)
 
     return valid_losses, should_stop
 

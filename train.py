@@ -6,6 +6,8 @@
 """
 Legacy entry point. Use fairseq_cli/train.py or fairseq-train instead.
 """
+# import multiprocessing
+# multiprocessing.set_start_method('spawn',True)  # debugging purpose only
 
 from fairseq_cli.train import cli_main
 

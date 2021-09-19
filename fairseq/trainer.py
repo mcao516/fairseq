@@ -300,6 +300,26 @@ class Trainer(object):
             )
             logger.info(f"Finished saving checkpoint to {filename}")
 
+    def save_target_checkpoint(self, filename):
+        """Save all training state in a checkpoint file."""
+        if self.is_data_parallel_master:  # only save one checkpoint
+            logger.info(
+                f"Preparing to save target checkpoint to {filename} after "
+                f"{self.get_num_updates()} updates"
+            )
+            checkpoint_utils.save_state(
+                filename,
+                self.cfg,
+                self.get_target_model().state_dict(),
+                self.get_criterion(),
+                self.optimizer,
+                self.lr_scheduler,
+                self.get_num_updates(),
+                self._optim_history,
+                None,
+            )
+            logger.info(f"Finished saving target checkpoint to {filename}")
+
     def load_checkpoint(
         self,
         filename,
@@ -951,6 +971,10 @@ class Trainer(object):
     def get_model(self):
         """Get the (non-wrapped) model instance."""
         return self._model
+
+    def get_target_model(self):
+       """Get the (non-wrapped) target model instance."""
+        return self._tgt_model
 
     def get_criterion(self):
         """Get the (non-wrapped) criterion instance."""

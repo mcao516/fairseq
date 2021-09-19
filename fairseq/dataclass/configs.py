@@ -483,6 +483,16 @@ class OptimizationConfig(FairseqDataclass):
 
 @dataclass
 class CheckpointConfig(FairseqDataclass):
+    save_target_path: str = field(
+        default=None,
+        metadata={"help": "path to save target model"}
+    )
+    restore_tgt_file: str = field(
+        default=None,
+        metadata={
+            "help": "filename from which to load target model checkpoint"
+        },
+    )
     save_dir: str = field(
         default="checkpoints", metadata={"help": "path to save checkpoints"}
     )
