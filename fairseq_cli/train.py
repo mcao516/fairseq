@@ -337,8 +337,8 @@ def validate_and_save(
         )
 
         # Save target checkpoint
-        if cfg.checkpoint.save_target_path is not None:
-            trainer.save_target_checkpoint(cfg.checkpoint.save_target_path)
+        if cfg.checkpoint.save_tgt_path is not None:
+            trainer.save_target_checkpoint(cfg.checkpoint.save_tgt_path)
 
     return valid_losses, should_stop
 

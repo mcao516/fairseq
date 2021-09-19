@@ -458,7 +458,8 @@ class Trainer(object):
             )
 
             if load_on_all_ranks or self.data_parallel_rank == 0:
-                state = checkpoint_utils.load_checkpoint_to_cpu(filename)
+                with open(PathManager.get_local_path(filename), "rb") as f:
+                    state = torch.load(f, map_location=torch.device("cpu"))
             else:
                 state = None
 
@@ -973,7 +974,6 @@ class Trainer(object):
         return self._model
 
     def get_target_model(self):
-       """Get the (non-wrapped) target model instance."""
         return self._tgt_model
 
     def get_criterion(self):
