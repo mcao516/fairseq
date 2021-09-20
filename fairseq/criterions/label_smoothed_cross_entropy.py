@@ -178,12 +178,36 @@ def sequence_mask(lengths, max_len=None, dtype=None, device=None) :
 
 
 def masked_reverse_cumsum(X, lengths, dim):
+    """
+    Args:
+        X (Tensor): [batch_size, max_tgt_len]
+        lengths (Tensor): [batch_size]
+        dim (int): -1
+        gamma (float): the discount factor
+    
+    """
     masked_X = X * sequence_mask(lengths, max_len=X.shape[1])
     return (masked_X
             .flip(dims=[dim])
             .cumsum(dim=dim)
             .flip(dims=[dim]))
 
+
+def discounted_masked_reverse_cumsum(X, lengths, dim, gamma=1.0):
+    """
+    Args:
+        X (Tensor): [batch_size, max_tgt_len]
+        lengths (Tensor): [batch_size]
+        dim (int): -1
+        gamma (float): the discount factor
+    
+    """
+    masked_X = X * sequence_mask(lengths, max_len=X.shape[1])
+    t_steps = torch.arange(X.shape[-1]).to(masked_X)
+    r = masked_X * (gamma ** t_steps)
+    r = r.flip(dims=[dim]).cumsum(dim=dim).flip(dims=[dim])
+    r = r / (gamma ** t_steps)
+    return r
 
 def get_reward_shaping_func(
     old_min: float,
@@ -219,15 +243,10 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0)
     V = logits.logsumexp(dim=-1)
     A = Q - V
 
-    # if str(A.device) == 'cuda:0':
-    #     print((-A[0]).tolist())
-    #     print(sum((-A[0]).tolist()))
-    #     print()
-    
     # calculate V(s_t+1) + r_t - V(s_t)
     A_ = torch.zeros_like(Q)
     V_ = logits_.logsumexp(dim=-1)
-    A_[:, :-1] = V_[:, 1:] - V_[:, :-1]
+    A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1]
     
     terminal_V_ = V_[
         torch.arange(seq_lens.shape[0]),
@@ -236,7 +255,7 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0)
     A_[torch.arange(seq_lens.shape[0]),
        seq_lens - 1] = rewards - terminal_V_
     
-    raw_losses = F.mse_loss(gamma * A, A_, reduction="none")
+    raw_losses = F.mse_loss(A, A_, reduction="none")
     return raw_losses
 
 
@@ -251,7 +270,7 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     # calculate V(s_t+1) + r_t - V(s_t)
     A_ = torch.zeros_like(Q)
     V_ = logits_.logsumexp(dim=-1)
-    A_[:, :-1] = V_[:, 1:] - V_[:, :-1] + rewards[:, :-1]
+    A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1] + rewards[:, :-1]
     
     terminal_V_ = V_[
         torch.arange(seq_lens.shape[0]),
@@ -264,7 +283,7 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     A_[torch.arange(seq_lens.shape[0]),
        seq_lens - 1] = terminal_R - terminal_V_
     
-    raw_losses = F.mse_loss(gamma * A, A_, reduction="none")
+    raw_losses = F.mse_loss(A, A_, reduction="none")
     return raw_losses
 
 
@@ -288,13 +307,18 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = logits.logsumexp(dim=-1)
     A = Q - V
-    A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
+    # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
+    A2 = discounted_masked_reverse_cumsum(
+        A,
+        lengths=seq_lens,
+        dim=-1,
+        gamma=gamma)
 
     # Target outputs
     V_ = logits_.logsumexp(dim=-1)
 
     raw_losses = F.mse_loss(
-        gamma * A2, rewards.view(-1, 1) - V_,
+        A2, rewards.view(-1, 1) - V_,
         reduction="none")
     return raw_losses
 
@@ -307,20 +331,24 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = logits.logsumexp(dim=-1)
     A = Q - V
-    A2 = masked_reverse_cumsum(
+    # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
+    A2 = discounted_masked_reverse_cumsum(
         A,
         lengths=seq_lens,
-        dim=-1)
+        dim=-1,
+        gamma=gamma)
 
     V_ = logits_.logsumexp(dim=-1)
-    R = masked_reverse_cumsum(
+    # R = masked_reverse_cumsum(rewards, lengths=seq_lens, dim=-1)
+    R = discounted_masked_reverse_cumsum(
         rewards,
         lengths=seq_lens,
-        dim=-1)
+        dim=-1,
+        gamma=gamma)
 
     assert R.shape == V_.shape
     raw_losses = F.mse_loss(
-        gamma * A2, R - V_,
+        A2, R - V_,
         reduction="none")
     return raw_losses
 
