@@ -222,7 +222,7 @@ def get_reward_shaping_func(
     return _shaping_func
 
 
-def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
+def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
     """
     Single-step unified path consistency learning (PCL). 
     
@@ -240,12 +240,12 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0)
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = logits.logsumexp(dim=-1)
+    V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V
 
     # calculate V(s_t+1) + r_t - V(s_t)
     A_ = torch.zeros_like(Q)
-    V_ = logits_.logsumexp(dim=-1)
+    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
     A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1]
     
     terminal_V_ = V_[
@@ -259,17 +259,17 @@ def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0)
     return raw_losses
 
 
-def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
+def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
     # calculate policy pi, which equals the advantage function
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = logits.logsumexp(dim=-1)
+    V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V  # [batch_size, tgt_len]
     
     # calculate V(s_t+1) + r_t - V(s_t)
     A_ = torch.zeros_like(Q)
-    V_ = logits_.logsumexp(dim=-1)
+    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
     A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1] + rewards[:, :-1]
     
     terminal_V_ = V_[
@@ -287,7 +287,7 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     return raw_losses
 
 
-def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
+def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
     """
     Multi-step unified path consistency learning (PCL). 
     
@@ -305,7 +305,7 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
         actions = actions.unsqueeze(-1)
 
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = logits.logsumexp(dim=-1)
+    V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V
     # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
     A2 = discounted_masked_reverse_cumsum(
@@ -315,7 +315,7 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
         gamma=gamma)
 
     # Target outputs
-    V_ = logits_.logsumexp(dim=-1)
+    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
 
     raw_losses = F.mse_loss(
         A2, rewards.view(-1, 1) - V_,
@@ -323,13 +323,13 @@ def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
     return raw_losses
 
 
-def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0):
+def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
 
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
 
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = logits.logsumexp(dim=-1)
+    V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V
     # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
     A2 = discounted_masked_reverse_cumsum(
@@ -338,7 +338,7 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
         dim=-1,
         gamma=gamma)
 
-    V_ = logits_.logsumexp(dim=-1)
+    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
     # R = masked_reverse_cumsum(rewards, lengths=seq_lens, dim=-1)
     R = discounted_masked_reverse_cumsum(
         rewards,
@@ -353,18 +353,18 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
     return raw_losses
 
 
-def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True, gamma=1.0):
+def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True, gamma=1.0, tau=1.0):
     """
     A mix of single- and multi-step PCL update.
 
     """
     if rewards.dim() == 1:
-        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma)
-        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma)
+        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
+        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
 
     elif rewards.dim() == 2:
-        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma)
-        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma)
+        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
+        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
 
     else:
         raise Exception("Rewards shape does NOT seems right: {}.".format(rewards.shape))
@@ -407,6 +407,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         new_r_min=-0.5,
         new_r_max=0.5,
         gamma_pcl=1.0,
+        tau_pcl=1.0,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
@@ -414,6 +415,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
         self.gamma = gamma_pcl
+        self.tau = tau_pcl
 
         if reward_shaping:
             self._reward_shaping_func = get_reward_shaping_func(
@@ -445,6 +447,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         parser.add_argument('--new-r-max', default=0.5, type=float,
                             help='Maximum reward value after reshaping')
         parser.add_argument('--gamma-pcl', default=1.0, type=float,
+                            help='Reward discount factor')
+        parser.add_argument('--tau-pcl', default=1.0, type=float,
                             help='Shannon entropy coefficient in PCL')
         # fmt: on
 
@@ -555,7 +559,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             sample['tgt_lengths'],
             ignore_index=self.padding_idx,
             reduce=reduce,
-            gamma=self.gamma
+            gamma=self.gamma,
+            tau=self.tau
         )
         return loss
 
