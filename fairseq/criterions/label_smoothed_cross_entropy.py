@@ -210,7 +210,8 @@ def discounted_future_sum(values, lengths, num_steps=None, gamma=1.0):
     num_steps = total_steps if num_steps is None else num_steps
     num_steps = min(num_steps, total_steps)
     
-    padded_values = torch.cat([values, torch.zeros([batch_size, num_steps - 1])], 1)
+    padding = torch.zeros([batch_size, num_steps - 1]).to(values)
+    padded_values = torch.cat([values, padding], 1)
     discount_filter = gamma ** torch.arange(num_steps).to(values).reshape(1, 1, -1)
 
     output = F.conv1d(padded_values.unsqueeze(-2), discount_filter).squeeze(1)
