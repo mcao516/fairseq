@@ -193,21 +193,29 @@ def masked_reverse_cumsum(X, lengths, dim):
             .flip(dims=[dim]))
 
 
-def discounted_masked_reverse_cumsum(X, lengths, dim, gamma=1.0):
+def discounted_future_sum(values, lengths, num_steps=None, gamma=1.0):
     """
     Args:
-        X (Tensor): [batch_size, max_tgt_len]
+        values (Tensor): [batch_size, max_tgt_len]
         lengths (Tensor): [batch_size]
-        dim (int): -1
-        gamma (float): the discount factor
+        num_steps (int): A positive integer number of future steps to sum
+        gamma (float): A float discount value
     
     """
-    masked_X = X * sequence_mask(lengths, max_len=X.shape[1])
-    t_steps = torch.arange(X.shape[-1]).to(masked_X)
-    r = masked_X * (gamma ** t_steps)
-    r = r.flip(dims=[dim]).cumsum(dim=dim).flip(dims=[dim])
-    r = r / (gamma ** t_steps)
-    return r
+    assert values.dim() == 2
+    
+    batch_size, total_steps = values.shape
+    values = values * sequence_mask(lengths, max_len=values.shape[1])
+
+    num_steps = total_steps if num_steps is None else num_steps
+    num_steps = min(num_steps, total_steps)
+    
+    padded_values = torch.cat([values, torch.zeros([batch_size, num_steps - 1])], 1)
+    discount_filter = gamma ** torch.arange(num_steps).to(values).reshape(1, 1, -1)
+
+    output = F.conv1d(padded_values.unsqueeze(-2), discount_filter).squeeze(1)
+    return output
+
 
 def get_reward_shaping_func(
     old_min: float,
@@ -222,47 +230,40 @@ def get_reward_shaping_func(
     return _shaping_func
 
 
-def single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
+def single_step_PCL_loss(
+    logits, 
+    logits_, 
+    actions, 
+    rewards, 
+    seq_lens, 
+    gamma=1.0, 
+    tau=1.0
+):
     """
     Single-step unified path consistency learning (PCL). 
     
     See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.15).
 
     Args:
-        logits: [batch_size, tgt_len, vocab_size]
-        logits_: [batch_size, tgt_len, vocab_size]
-        actions: [batch_size, tgt_len]
-        rewards: [batch_size]
-        seq_lens: [batch_size]
-    
+        logits (Tensor): [batch_size, tgt_len, vocab_size]
+        logits_ (Tensor): [batch_size, tgt_len, vocab_size]
+        actions (Tensor): [batch_size, tgt_len]
+        rewards (Tensor): [batch_size] or [batch_size, tgt_len]
+        seq_lens (Tensor): [batch_size]
+        gamma (float): the discount factor
+        tau (float): Shannon entropy coefficient term
+
     """
-    # calculate policy pi, which equals the advantage function
+    if rewards.dim() == 1:
+        rewards_ = torch.zeros_like(actions).to(rewards)
+        rewards_[torch.arange(seq_lens.shape[0]), 
+                 seq_lens - 1] = rewards
+        rewards = rewards_
+    
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
-    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = tau * (logits / tau).logsumexp(dim=-1)
-    A = Q - V
-
-    # calculate V(s_t+1) + r_t - V(s_t)
-    A_ = torch.zeros_like(Q)
-    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
-    A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1]
     
-    terminal_V_ = V_[
-        torch.arange(seq_lens.shape[0]),
-        seq_lens - 1]  # terminal_V_: [batch_size]
-
-    A_[torch.arange(seq_lens.shape[0]),
-       seq_lens - 1] = rewards - terminal_V_
-    
-    raw_losses = F.mse_loss(A, A_, reduction="none")
-    return raw_losses
-
-
-def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
     # calculate policy pi, which equals the advantage function
-    if logits.dim() == actions.dim() + 1:
-        actions = actions.unsqueeze(-1)
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V  # [batch_size, tgt_len]
@@ -274,7 +275,7 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     
     terminal_V_ = V_[
         torch.arange(seq_lens.shape[0]),
-        seq_lens - 1]  # terminal_V_: [batch_size]
+        seq_lens - 1]  # [batch_size]
 
     terminal_R = rewards[
         torch.arange(seq_lens.shape[0]),
@@ -287,43 +288,35 @@ def single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq
     return raw_losses
 
 
-def multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
+def multi_step_PCL_loss(
+    logits, 
+    logits_, 
+    actions, 
+    rewards, 
+    seq_lens, 
+    gamma=1.0, 
+    tau=1.0
+):
     """
     Multi-step unified path consistency learning (PCL). 
     
     See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.17).
 
     Args:
-        logits: [batch_size, tgt_len, vocab_size]
-        logits_: [batch_size, tgt_len, vocab_size]
-        actions: [batch_size, tgt_len]
-        rewards: [batch_size]
-        seq_lens: [batch_size]
+        logits (Tensor): [batch_size, tgt_len, vocab_size]
+        logits_ (Tensor): [batch_size, tgt_len, vocab_size]
+        actions (Tensor): [batch_size, tgt_len]
+        rewards (Tensor): [batch_size] or [batch_size, tgt_len]
+        seq_lens (Tensor): [batch_size]
+        gamma (float): the discount factor
+        tau (float): Shannon entropy coefficient term
     
     """
-    if logits.dim() == actions.dim() + 1:
-        actions = actions.unsqueeze(-1)
-
-    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = tau * (logits / tau).logsumexp(dim=-1)
-    A = Q - V
-    # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
-    A2 = discounted_masked_reverse_cumsum(
-        A,
-        lengths=seq_lens,
-        dim=-1,
-        gamma=gamma)
-
-    # Target outputs
-    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
-
-    raw_losses = F.mse_loss(
-        A2, rewards.view(-1, 1) - V_,
-        reduction="none")
-    return raw_losses
-
-
-def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=1.0, tau=1.0):
+    if rewards.dim() == 1:
+        rewards_ = torch.zeros_like(actions).to(rewards)
+        rewards_[torch.arange(seq_lens.shape[0]), 
+                 seq_lens - 1] = rewards
+        rewards = rewards_
 
     if logits.dim() == actions.dim() + 1:
         actions = actions.unsqueeze(-1)
@@ -331,19 +324,15 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
     Q = logits.gather(dim=-1, index=actions).squeeze(-1)
     V = tau * (logits / tau).logsumexp(dim=-1)
     A = Q - V
-    # A2 = masked_reverse_cumsum(A, lengths=seq_lens, dim=-1)
-    A2 = discounted_masked_reverse_cumsum(
+    A2 = discounted_future_sum(
         A,
-        lengths=seq_lens,
-        dim=-1,
+        seq_lens,
         gamma=gamma)
 
     V_ = tau * (logits_ / tau).logsumexp(dim=-1)
-    # R = masked_reverse_cumsum(rewards, lengths=seq_lens, dim=-1)
-    R = discounted_masked_reverse_cumsum(
+    R = discounted_future_sum(
         rewards,
-        lengths=seq_lens,
-        dim=-1,
+        seq_lens,
         gamma=gamma)
 
     assert R.shape == V_.shape
@@ -353,21 +342,39 @@ def multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_
     return raw_losses
 
 
-def mixed_PCL_loss(logits, logits_, actions, rewards, seq_lens, ignore_index=None, reduce=True, gamma=1.0, tau=1.0):
+def mixed_PCL_loss(
+    logits, 
+    logits_, 
+    actions, 
+    rewards, 
+    seq_lens, 
+    ignore_index=None, 
+    reduce=True, 
+    gamma=1.0, 
+    tau=1.0
+):
     """
     A mix of single- and multi-step PCL update.
 
     """
-    if rewards.dim() == 1:
-        s_pcl = single_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
-        m_pcl = multi_step_PCL_loss(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
-
-    elif rewards.dim() == 2:
-        s_pcl = single_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
-        m_pcl = multi_step_PCL_loss_with_seq_rewards(logits, logits_, actions, rewards, seq_lens, gamma=gamma, tau=tau)
-
-    else:
-        raise Exception("Rewards shape does NOT seems right: {}.".format(rewards.shape))
+    s_pcl = single_step_PCL_loss(
+        logits, 
+        logits_, 
+        actions, 
+        rewards, 
+        seq_lens, 
+        gamma=gamma, 
+        tau=tau
+    )
+    m_pcl = multi_step_PCL_loss(
+        logits, 
+        logits_, 
+        actions, 
+        rewards, 
+        seq_lens, 
+        gamma=gamma, 
+        tau=tau
+    )
 
     raw_losses = (s_pcl + m_pcl) / 2
     assert raw_losses.shape == actions.shape, "Losses shape does not match: {}".format(raw_losses.shape)
