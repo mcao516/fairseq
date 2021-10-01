@@ -8,6 +8,7 @@ import math
 import torch
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
+from loss_dropper import LossDropper
 
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
@@ -39,12 +40,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         label_smoothing,
         ignore_prefix_size=0,
         report_accuracy=False,
+        dropc=0.4,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+        self.dropper = LossDropper(dropc=dropc)
 
     @staticmethod
     def add_args(parser):
@@ -56,6 +59,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='report accuracy metric')
         parser.add_argument('--ignore-prefix-size', default=0, type=int,
                             help='Ignore first N tokens')
+        parser.add_argument('--dropc', default=0.4, type=float,
+                            help='Loss truncation drop rate')
         # fmt: on
 
     def forward(self, model, sample, reduce=True):
@@ -103,8 +108,20 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             target,
             self.eps,
             ignore_index=self.padding_idx,
-            reduce=reduce,
+            reduce=False,
         )
+
+        # perform loss truncation
+        batch_size, tgt_length = sample['target'].shape
+        loss = loss.squeeze().view(batch_size, tgt_length).sum(dim=-1)
+        loss = loss * self.dropper(loss)
+        
+        if reduce:
+            loss = loss.sum()
+            nll_loss = nll_loss.sum()
+        else:
+            raise NotImplementedError
+        
         return loss, nll_loss
 
     def compute_accuracy(self, model, net_output, sample):
