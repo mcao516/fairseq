@@ -143,9 +143,9 @@ def label_smoothed_nll_loss(
 
     # calculate rewards
     with torch.no_grad():
-        pi_theta = torch.clamp(pi_theta, min=min_pi_theta, max=1.0)
+        pi_theta = torch.clamp(pi_theta, min=min_pi_theta, max=1.0).detach()
         Q = discounted_future_sum(mle_probs, seq_lens, num_steps=5, gamma=gamma)
-        Q = Q.view(-1).unsqueeze(-1)
+        Q = Q.view(-1).unsqueeze(-1).detach()
     assert pi_theta.shape == Q.shape == nll_loss.shape
     nll_loss = (pi_theta * Q) * nll_loss
 
@@ -348,6 +348,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         
         """
         net_output = model(**sample["net_input"])
+        tgt_model.eval()
         with torch.no_grad():
             tgt_output = tgt_model(**sample["net_input"])
 
