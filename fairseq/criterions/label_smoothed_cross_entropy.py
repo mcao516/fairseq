@@ -98,26 +98,57 @@ def mask_and_reduce(
                              sum_over_timesteps)
 
 
-def label_smoothed_nll_loss(lprobs, target, probs, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(
+    lprobs,
+    target,
+    epsilon,
+    tgt_probs,
+    mle_probs,
+    seq_lens,
+    ignore_index=None,
+    reduce=True,
+    gamma=1.0,
+    min_pi_theta=0.0
+):
     """
     Args:
         lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
         target (Tensor): [batch_size * max_tgt_len]
-        probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-        
+        tgt_probs (Tensor): [batch_size * max_tgt_len, vocab_size]
+        mle_probs (Tensor): [batch_size * max_tgt_len]
+        seq_lens (Tensor): [batch_size]
     """
+    # if str(lprobs.device) == 'cuda:0':
+    #     # print(torch.exp(lprobs[0][:10]))
+    #     # print(target[0])
+    #     print(tgt_probs[0][:10])
+    #     # print(mle_probs[0])
+    #     # print(seq_lens)
+
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
     nll_loss = -lprobs.gather(dim=-1, index=target) # [batch_size * max_tgt_len, 1]
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True) # [batch_size * max_tgt_len, 1]
 
+    pi_theta = tgt_probs.gather(dim=-1, index=target)
+
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
         smooth_loss.masked_fill_(pad_mask, 0.0)
+        pi_theta.masked_fill_(pad_mask, 1.0)
     else:
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
+
+    # calculate rewards
+    with torch.no_grad():
+        pi_theta = torch.clamp(pi_theta, min=min_pi_theta, max=1.0)
+        Q = discounted_future_sum(mle_probs, seq_lens, num_steps=5, gamma=gamma)
+        Q = Q.view(-1).unsqueeze(-1)
+    assert pi_theta.shape == Q.shape == nll_loss.shape
+    nll_loss = (pi_theta * Q) * nll_loss
+
     if reduce:
         nll_loss = nll_loss.sum()
         smooth_loss = smooth_loss.sum()
@@ -231,175 +262,6 @@ def get_reward_shaping_func(
     return _shaping_func
 
 
-def single_step_PCL_loss(
-    logits, 
-    logits_, 
-    actions, 
-    rewards, 
-    seq_lens, 
-    gamma=1.0, 
-    tau=1.0
-):
-    """
-    Single-step unified path consistency learning (PCL). 
-    
-    See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.15).
-
-    Args:
-        logits (Tensor): [batch_size, tgt_len, vocab_size]
-        logits_ (Tensor): [batch_size, tgt_len, vocab_size]
-        actions (Tensor): [batch_size, tgt_len]
-        rewards (Tensor): [batch_size] or [batch_size, tgt_len]
-        seq_lens (Tensor): [batch_size]
-        gamma (float): the discount factor
-        tau (float): Shannon entropy coefficient term
-
-    """
-    if rewards.dim() == 1:
-        rewards_ = torch.zeros_like(actions).to(rewards)
-        rewards_[torch.arange(seq_lens.shape[0]), 
-                 seq_lens - 1] = rewards
-        rewards = rewards_
-    
-    if logits.dim() == actions.dim() + 1:
-        actions = actions.unsqueeze(-1)
-    
-    # calculate policy pi, which equals the advantage function
-    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = tau * (logits / tau).logsumexp(dim=-1)
-    A = Q - V  # [batch_size, tgt_len]
-    
-    # calculate V(s_t+1) + r_t - V(s_t)
-    A_ = torch.zeros_like(Q)
-    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
-    A_[:, :-1] = gamma * V_[:, 1:] - V_[:, :-1] + rewards[:, :-1]
-    
-    terminal_V_ = V_[
-        torch.arange(seq_lens.shape[0]),
-        seq_lens - 1]  # [batch_size]
-
-    terminal_R = rewards[
-        torch.arange(seq_lens.shape[0]),
-        seq_lens - 1]
-
-    A_[torch.arange(seq_lens.shape[0]),
-       seq_lens - 1] = terminal_R - terminal_V_
-    
-    raw_losses = F.mse_loss(A, A_, reduction="none")
-    return raw_losses
-
-
-def multi_step_PCL_loss(
-    logits, 
-    logits_, 
-    actions, 
-    rewards, 
-    seq_lens, 
-    gamma=1.0, 
-    tau=1.0
-):
-    """
-    Multi-step unified path consistency learning (PCL). 
-    
-    See paper https://arxiv.org/pdf/2106.07704.pdf (Eq.17).
-
-    Args:
-        logits (Tensor): [batch_size, tgt_len, vocab_size]
-        logits_ (Tensor): [batch_size, tgt_len, vocab_size]
-        actions (Tensor): [batch_size, tgt_len]
-        rewards (Tensor): [batch_size] or [batch_size, tgt_len]
-        seq_lens (Tensor): [batch_size]
-        gamma (float): the discount factor
-        tau (float): Shannon entropy coefficient term
-    
-    """
-    if rewards.dim() == 1:
-        rewards_ = torch.zeros_like(actions).to(rewards)
-        rewards_[torch.arange(seq_lens.shape[0]), 
-                 seq_lens - 1] = rewards
-        rewards = rewards_
-
-    if logits.dim() == actions.dim() + 1:
-        actions = actions.unsqueeze(-1)
-
-    Q = logits.gather(dim=-1, index=actions).squeeze(-1)
-    V = tau * (logits / tau).logsumexp(dim=-1)
-    A = Q - V
-    A2 = discounted_future_sum(
-        A,
-        seq_lens,
-        gamma=gamma)
-
-    V_ = tau * (logits_ / tau).logsumexp(dim=-1)
-    R = discounted_future_sum(
-        rewards,
-        seq_lens,
-        gamma=gamma)
-
-    assert R.shape == V_.shape
-    raw_losses = F.mse_loss(
-        A2, R - V_,
-        reduction="none")
-    return raw_losses
-
-
-def mixed_PCL_loss(
-    logits, 
-    logits_, 
-    actions, 
-    rewards, 
-    seq_lens, 
-    ignore_index=None, 
-    reduce=True, 
-    gamma=1.0, 
-    tau=1.0
-):
-    """
-    A mix of single- and multi-step PCL update.
-
-    """
-    s_pcl = single_step_PCL_loss(
-        logits, 
-        logits_, 
-        actions, 
-        rewards, 
-        seq_lens, 
-        gamma=gamma, 
-        tau=tau
-    )
-    m_pcl = multi_step_PCL_loss(
-        logits, 
-        logits_, 
-        actions, 
-        rewards, 
-        seq_lens, 
-        gamma=gamma, 
-        tau=tau
-    )
-
-    raw_losses = (s_pcl + m_pcl) / 2
-    assert raw_losses.shape == actions.shape, "Losses shape does not match: {}".format(raw_losses.shape)
-
-    loss = mask_and_reduce(
-        sequence=raw_losses,
-        sequence_length=seq_lens,
-        average_across_batch=True,
-        average_across_timesteps=True,
-        sum_over_batch=False,
-        sum_over_timesteps=False
-    )
-
-    # mask & reduce
-    # if ignore_index is not None:
-    #     pad_mask = actions.eq(ignore_index)
-    #     raw_losses.masked_fill_(pad_mask, 0.0)
-
-    # if reduce:
-    #     loss = raw_losses.mean()
-    
-    return loss
-
-
 @register_criterion("label_smoothed_cross_entropy")
 class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
     def __init__(
@@ -414,16 +276,16 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         old_r_max=1.0,
         new_r_min=-0.5,
         new_r_max=0.5,
-        gamma_pcl=1.0,
-        tau_pcl=1.0,
+        gamma=1.0,
+        min_pi_theta=1.0,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
-        self.gamma = gamma_pcl
-        self.tau = tau_pcl
+        self.gamma = gamma
+        self.min_pi_theta = min_pi_theta
 
         if reward_shaping:
             self._reward_shaping_func = get_reward_shaping_func(
@@ -454,10 +316,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='Minimum reward value after reshaping')
         parser.add_argument('--new-r-max', default=0.5, type=float,
                             help='Maximum reward value after reshaping')
-        parser.add_argument('--gamma-pcl', default=1.0, type=float,
-                            help='Reward discount factor')
-        parser.add_argument('--tau-pcl', default=1.0, type=float,
-                            help='Shannon entropy coefficient in PCL')
+        parser.add_argument('--gamma', default=1.0, type=float)
+        parser.add_argument('--min_pi_theta', default=0.0, type=float,
+                            help='Minimum Pi_theta')
         # fmt: on
 
     def forward(self, model, tgt_model, sample, reduce=True):
@@ -490,7 +351,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         with torch.no_grad():
             tgt_output = tgt_model(**sample["net_input"])
 
-        loss = self.compute_loss(
+        loss, nll_loss = self.compute_loss(
             model,
             net_output,
             sample,
@@ -559,18 +420,21 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         if rewards.dtype != net_output[0].dtype and net_output[0].dtype == torch.float16:
             rewards = rewards.half()
 
-        loss = mixed_PCL_loss(
-            net_output[0],
-            tgt_output[0],
+        lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
+        tgt_probs = self.get_probs(tgt_model, tgt_output)
+        loss, nll_loss = label_smoothed_nll_loss(
+            lprobs,
             target,
+            self.eps,
+            tgt_probs,
             rewards,
             sample['tgt_lengths'],
             ignore_index=self.padding_idx,
             reduce=reduce,
             gamma=self.gamma,
-            tau=self.tau
+            min_pi_theta=self.min_pi_theta
         )
-        return loss
+        return loss, nll_loss
 
     def compute_accuracy(self, model, net_output, sample):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
