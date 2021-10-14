@@ -108,7 +108,8 @@ def label_smoothed_nll_loss(
     ignore_index=None,
     reduce=True,
     gamma=1.0,
-    min_pi_theta=0.0
+    min_pi_theta=0.0,
+    n_steps=5
 ):
     """
     Args:
@@ -144,7 +145,7 @@ def label_smoothed_nll_loss(
     # calculate rewards
     with torch.no_grad():
         pi_theta = torch.clamp(pi_theta, min=min_pi_theta, max=1.0).detach()
-        Q = discounted_future_sum(mle_probs, seq_lens, num_steps=5, gamma=gamma)
+        Q = discounted_future_sum(mle_probs, seq_lens, num_steps=n_steps, gamma=gamma)
         Q = Q.view(-1).unsqueeze(-1).detach()
     assert pi_theta.shape == Q.shape == nll_loss.shape
     nll_loss = (pi_theta * Q) * nll_loss
@@ -278,6 +279,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         new_r_max=0.5,
         gamma=1.0,
         min_pi_theta=1.0,
+        n_steps=5
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
@@ -286,6 +288,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.report_accuracy = report_accuracy
         self.gamma = gamma
         self.min_pi_theta = min_pi_theta
+        self.n_steps = n_steps
 
         if reward_shaping:
             self._reward_shaping_func = get_reward_shaping_func(
@@ -319,7 +322,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         parser.add_argument('--gamma', default=1.0, type=float)
         parser.add_argument('--min_pi_theta', default=0.0, type=float,
                             help='Minimum Pi_theta')
-        # fmt: on
+        pparser.add_argument('--n_steps', default=5, type=int,
+                            help='Number of steps to track to future')
+        # fmt: 
 
     def forward(self, model, tgt_model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -433,7 +438,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             ignore_index=self.padding_idx,
             reduce=reduce,
             gamma=self.gamma,
-            min_pi_theta=self.min_pi_theta
+            min_pi_theta=self.min_pi_theta,
+            n_steps=self.n_steps
         )
         return loss, nll_loss
 
