@@ -322,7 +322,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         parser.add_argument('--gamma', default=1.0, type=float)
         parser.add_argument('--min_pi_theta', default=0.0, type=float,
                             help='Minimum Pi_theta')
-        pparser.add_argument('--n_steps', default=5, type=int,
+        parser.add_argument('--n_steps', default=5, type=int,
                             help='Number of steps to track to future')
         # fmt: 
 
