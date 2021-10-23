@@ -121,6 +121,12 @@ def main(cfg: DictConfig) -> None:
         disable_iterator_cache=task.has_sharded_data("train"),
     )
 
+    for name, param in trainer._model.named_parameters():
+        if name == 'encoder.embed_tokens.weight':
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
     max_epoch = cfg.optimization.max_epoch or math.inf
     lr = trainer.get_lr()
     train_meter = meters.StopwatchMeter()
