@@ -102,53 +102,37 @@ def label_smoothed_nll_loss(
     lprobs,
     target,
     epsilon,
-    tgt_probs,
-    mle_probs,
+    rewards,
     seq_lens,
     ignore_index=None,
     reduce=True,
     gamma=1.0,
-    min_pi_theta=0.0,
     n_steps=5
 ):
     """
     Args:
         lprobs (Tensor): [batch_size * max_tgt_len, vocab_size]
         target (Tensor): [batch_size * max_tgt_len]
-        tgt_probs (Tensor): [batch_size * max_tgt_len, vocab_size]
-        mle_probs (Tensor): [batch_size * max_tgt_len]
+        rewards (Tensor): [batch_size * max_tgt_len]
         seq_lens (Tensor): [batch_size]
     """
-    # if str(lprobs.device) == 'cuda:0':
-    #     # print(torch.exp(lprobs[0][:10]))
-    #     # print(target[0])
-    #     print(tgt_probs[0][:10])
-    #     # print(mle_probs[0])
-    #     # print(seq_lens)
-
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1) # [batch_size * max_tgt_len, 1]
     nll_loss = -lprobs.gather(dim=-1, index=target) # [batch_size * max_tgt_len, 1]
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True) # [batch_size * max_tgt_len, 1]
 
-    pi_theta = tgt_probs.gather(dim=-1, index=target)
-
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
         smooth_loss.masked_fill_(pad_mask, 0.0)
-        pi_theta.masked_fill_(pad_mask, 1.0)
     else:
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
 
-    # calculate rewards
     with torch.no_grad():
-        pi_theta = torch.clamp(pi_theta, min=min_pi_theta, max=1.0).detach()
-        Q = discounted_future_sum(mle_probs, seq_lens, num_steps=n_steps, gamma=gamma)
+        Q = discounted_future_sum(rewards, seq_lens, num_steps=n_steps, gamma=gamma)
         Q = Q.view(-1).unsqueeze(-1).detach()
-    assert pi_theta.shape == Q.shape == nll_loss.shape
-    nll_loss = (pi_theta * Q) * nll_loss
+    nll_loss = Q * nll_loss
 
     if reduce:
         nll_loss = nll_loss.sum()
@@ -278,7 +262,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         new_r_min=-0.5,
         new_r_max=0.5,
         gamma=1.0,
-        min_pi_theta=1.0,
+        min_reward=0.0,
         n_steps=5
     ):
         super().__init__(task)
@@ -287,7 +271,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
         self.gamma = gamma
-        self.min_pi_theta = min_pi_theta
+        self.min_reward = min_reward
         self.n_steps = n_steps
 
         if reward_shaping:
@@ -320,8 +304,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         parser.add_argument('--new-r-max', default=0.5, type=float,
                             help='Maximum reward value after reshaping')
         parser.add_argument('--gamma', default=1.0, type=float)
-        parser.add_argument('--min_pi_theta', default=0.0, type=float,
-                            help='Minimum Pi_theta')
+        parser.add_argument('--min_reward', default=0.0, type=float,
+                            help='Minimum reward value')
         parser.add_argument('--n_steps', default=5, type=int,
                             help='Number of steps to track to future')
         # fmt: 
@@ -413,32 +397,25 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 - the decoder's output of shape `(batch, tgt_len, vocab)`
                 - a dictionary with any model-specific outputs
         """
-        target = model.get_targets(sample, net_output)  # target: [batch_size, max_tgt_len]
+        target = model.get_targets(sample, net_output)
+        batch_size, max_tgt_len = target.shape
 
-        rewards = None
-        if sample.get('rewards', None) is not None:
-            rewards = sample['rewards']
-            assert rewards.shape[0] == target.shape[0] and \
-                (rewards.dim() == 1 or rewards.shape[1] == target.shape[1]), \
-                "Target size: {}; rewards size: {}.".format(target.size(), rewards.size())
-
-        rewards = self._reward_shaping_func(rewards)
-        if rewards.dtype != net_output[0].dtype and net_output[0].dtype == torch.float16:
-            rewards = rewards.half()
-
-        lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
         tgt_probs = self.get_probs(tgt_model, tgt_output)
+        lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
+
+        rewards = tgt_probs.gather(dim=-1, index=target.unsqueeze(-1))
+        rewards = torch.clamp(rewards, min=self.min_reward, max=1.0).detach()
+        rewards = self._reward_shaping_func(rewards).view(batch_size, max_tgt_len)
+        
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
             target,
             self.eps,
-            tgt_probs,
             rewards,
             sample['tgt_lengths'],
             ignore_index=self.padding_idx,
             reduce=reduce,
             gamma=self.gamma,
-            min_pi_theta=self.min_pi_theta,
             n_steps=self.n_steps
         )
         return loss, nll_loss
