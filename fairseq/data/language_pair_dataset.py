@@ -111,25 +111,6 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    rewards = None
-    if samples[0].get('reward', None) is not None:
-        if samples[0]['reward'].shape[0] == 1:
-            rewards_ = []
-            for s in samples:
-                assert s['reward'].dim() == 1 and s['reward'].shape[0] == 1
-                rewards_.append(s['reward'])
-            rewards = torch.cat(rewards_)
-            assert rewards.shape[0] == len(samples)
-        else:
-            rewards = merge(
-                'reward',
-                left_pad=left_pad_target,
-                pad_to_length=pad_to_length["target"]
-                if pad_to_length is not None
-                else None,
-            )
-            rewards = rewards.index_select(0, sort_order)
-
     batch = {
         "id": id,
         "nsentences": len(samples),
@@ -140,7 +121,6 @@ def collate(
         },
         "target": target,
         "tgt_lengths": tgt_lengths,
-        "rewards": rewards
     }
 
     if prev_output_tokens is not None:
@@ -249,8 +229,6 @@ class LanguagePairDataset(FairseqDataset):
         src_lang_id=None,
         tgt_lang_id=None,
         pad_to_multiple=1,
-        train_rewards=None,
-        valid_rewards=None
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -262,8 +240,6 @@ class LanguagePairDataset(FairseqDataset):
             ), "Source and target must contain the same number of examples"
         self.src = src
         self.tgt = tgt
-        self.train_rewards = train_rewards
-        self.val_rewards = valid_rewards
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.sizes = (
@@ -359,20 +335,6 @@ class LanguagePairDataset(FairseqDataset):
             "source": src_item,
             "target": tgt_item
         }
-        if self.tgt is not None:
-            assert self.train_rewards is not None and self.val_rewards is not None
-            
-            if len(self.tgt) == len(self.train_rewards):
-                rewards = self.train_rewards
-            elif len(self.tgt) == len(self.val_rewards):
-                rewards = self.val_rewards
-            else:
-                raise Exception("Something wrong with rewards size!")
-
-            example['reward'] = torch.tensor(rewards[index])
-            assert tgt_item.size() == example['reward'].size() or \
-                (example['reward'].dim() == 1 and example['reward'].shape[0] == 1)
-
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
         if self.constraints is not None:
