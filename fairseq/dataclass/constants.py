@@ -35,12 +35,20 @@ def ChoiceEnum(choices: List[str]):
 
 
 LOG_FORMAT_CHOICES = ChoiceEnum(["json", "none", "simple", "tqdm"])
-DDP_BACKEND_CHOICES = ChoiceEnum(["c10d", "no_c10d"])
-DATASET_IMPL_CHOICES = ChoiceEnum(["raw", "lazy", "cached", "mmap", "fasta"])
-DISTRIBUTED_WRAPPER_CHOICES = ChoiceEnum(["DDP", "SlowMo"])
+DDP_BACKEND_CHOICES = ChoiceEnum([
+    "c10d",  # alias for pytorch_ddp
+    "fully_sharded",  # FullyShardedDataParallel from fairscale
+    "legacy_ddp",
+    "no_c10d",  # alias for legacy_ddp
+    "pytorch_ddp",
+    "slow_mo",
+])
+DDP_COMM_HOOK_CHOICES = ChoiceEnum(["none", "fp16"])
+DATASET_IMPL_CHOICES = ChoiceEnum(["raw", "lazy", "cached", "mmap", "fasta", "huffman"])
 GENERATION_CONSTRAINTS_CHOICES = ChoiceEnum(["ordered", "unordered"])
 GENERATION_DECODING_FORMAT_CHOICES = ChoiceEnum(
     ["unigram", "ensemble", "vote", "dp", "bs"]
 )
 ZERO_SHARDING_CHOICES = ChoiceEnum(["none", "os"])
 PIPELINE_CHECKPOINT_CHOICES = ChoiceEnum(["always", "never", "except_last"])
+PRINT_ALIGNMENT_CHOICES = ChoiceEnum(["hard", "soft"])
