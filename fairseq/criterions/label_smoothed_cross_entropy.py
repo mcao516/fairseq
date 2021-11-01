@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import math
 import torch
 import pickle
@@ -74,7 +75,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 'token_loss': nll_token_loss.detach(),
                 'sentence_loss': nll_loss.detach(),
             }
-            torch.save(data_to_save, self.loss_save_dir)
+            loss_path = os.path.join(self.loss_save_dir, 
+                                     '{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now()))
+            torch.save(data_to_save, loss_path)
         # =================================================================================================
 
         sample_size = sample['target'].size(0) if self.sentence_avg else sample['ntokens']
