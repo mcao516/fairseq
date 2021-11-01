@@ -36,10 +36,11 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
 @register_criterion('label_smoothed_cross_entropy')
 class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
-    def __init__(self, task, sentence_avg, label_smoothing):
+    def __init__(self, task, sentence_avg, label_smoothing, loss_save_dir):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
+        self.loss_save_dir = loss_save_dir
 
     @staticmethod
     def add_args(parser):
@@ -47,6 +48,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         # fmt: off
         parser.add_argument('--label-smoothing', default=0., type=float, metavar='D',
                             help='epsilon for label smoothing, 0 means no label smoothing')
+        parser.add_argument('--loss-save-dir', default='loss_analysis/', type=str,
+                            help='directory for loss saving')
         # fmt: on
 
     def forward(self, model, sample, reduce=True):
@@ -71,8 +74,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                 'token_loss': nll_token_loss.detach(),
                 'sentence_loss': nll_loss.detach(),
             }
-            path = '/home/mcao610/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
-            torch.save(data_to_save, path)
+            torch.save(data_to_save, self.loss_save_dir)
         # =================================================================================================
 
         sample_size = sample['target'].size(0) if self.sentence_avg else sample['ntokens']
