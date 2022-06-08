@@ -12,9 +12,8 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 
 UNK_ID = 3
-Alpha = 1.0
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None, alpha=1.0):
     """
     Args:
         lprobs (tensor): [bs * tgt_length, vocab_size]
@@ -44,8 +43,8 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     prob_unk = torch.exp(lprob_unk)  # prob_unk: [bs * tgt_length]
     prob_unk_reduced = (1. - prob_unk)
 
-    a = prob_unk_reduced.masked_fill_(mask.eq(0), 1.0).unsqueeze(-1)
-    b = (prob_unk_reduced - Alpha) * torch.log(prob_unk_reduced) * mask
+    a = prob_unk_reduced.masked_fill(mask.eq(0), 1.0).unsqueeze(-1)
+    b = (prob_unk_reduced - alpha) * torch.log(prob_unk_reduced) * mask
     b = b.unsqueeze(-1)
 
     # for analysis
@@ -74,12 +73,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         label_smoothing,
         ignore_prefix_size=0,
         report_accuracy=False,
+        abst_alpha=1.0,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+        self.alpha = abst_alpha
 
     @staticmethod
     def add_args(parser):
@@ -91,6 +92,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
                             help='report accuracy metric')
         parser.add_argument('--ignore-prefix-size', default=0, type=int,
                             help='Ignore first N tokens')
+        parser.add_argument('--abst-alpha', default=1., type=float,
+                            help='Loss abstention weight')
         # fmt: on
 
     def forward(self, model, sample, reduce=True):
@@ -106,22 +109,22 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
         # ==================================================================================================
 
-        ids = sample['id'].tolist()
-        i = min(ids)
-        if i < 30 and model.training:
-            with torch.no_grad():
-                _, nll_token_loss, nll_loss_regularized, regularizer = self.compute_loss(model, net_output, sample, reduce=False)
+        # ids = sample['id'].tolist()
+        # i = min(ids)
+        # if i < 30 and model.training:
+        #     with torch.no_grad():
+        #         _, nll_token_loss, nll_loss_regularized, regularizer = self.compute_loss(model, net_output, sample, reduce=False)
 
-            data_to_save = {
-                'sample': sample,
-                'token_loss': nll_token_loss.detach(),
-                'sentence_loss': nll_loss.detach(),
-                'token_loss_regularized': nll_loss_regularized.detach(),
-                'regularizer': regularizer.detach()
-            }
+        #     data_to_save = {
+        #         'sample': sample,
+        #         'token_loss': nll_token_loss.detach(),
+        #         'sentence_loss': nll_loss.detach(),
+        #         'token_loss_regularized': nll_loss_regularized.detach(),
+        #         'regularizer': regularizer.detach()
+        #     }
 
-            path = '/home/mcao610/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
-            torch.save(data_to_save, path)
+        #     path = '/home/mcao610/fairseq/loss_analysis/{}.{:%Y%m%d_%H%M%S}.obj'.format(i, datetime.now())
+        #     torch.save(data_to_save, path)
         
         # ==================================================================================================
 
@@ -170,7 +173,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             self.eps,
             ignore_index=self.padding_idx,
             reduce=reduce,
-            mask=mask
+            mask=mask,
+            alpha=self.alpha
         )
         return loss, nll_loss, nll_loss_regularized, regularizer
 
