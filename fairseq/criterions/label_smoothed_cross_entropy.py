@@ -16,7 +16,7 @@ UNK_ID = 3
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None, alpha=1.0):
     """
     Args:
-        lprobs (tensor): [bs * tgt_length, vocab_size]
+        lprobs (tensor): [bs, tgt_length, vocab_size]
         target (tensor): [bs * tgt_length]
         mask (tensor): [bs * tgt_length]
     """

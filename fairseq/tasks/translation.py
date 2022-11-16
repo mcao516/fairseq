@@ -22,6 +22,7 @@ from fairseq.data import (
     encoders,
     indexed_dataset,
 )
+from os import path
 from fairseq.tasks import LegacyFairseqTask, register_task
 
 
@@ -29,6 +30,17 @@ EVAL_BLEU_ORDER = 4
 
 
 logger = logging.getLogger(__name__)
+
+
+def read_mask(mask_path):
+    assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
+    mask = []
+    with open(mask_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            mask.append([int(i) for i in line.split()])
+    logger.info("Loss abstention mask loaded (size={}).".format(len(mask)))
+    return mask
 
 
 def load_langpair_dataset(
@@ -52,6 +64,7 @@ def load_langpair_dataset(
     num_buckets=0,
     shuffle=True,
     pad_to_multiple=1,
+    abstention_mask_dir=None,
 ):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
@@ -144,6 +157,11 @@ def load_langpair_dataset(
                 align_path, None, dataset_impl
             )
     # ========================================================================= #
+    
+    train_abs_mask, val_abs_mask = None, None
+    if abstention_mask_dir is not None:
+        train_abs_mask = read_mask(path.join(abstention_mask_dir, "train.mask"))
+        val_abs_mask = read_mask(path.join(abstention_mask_dir, "val.mask"))
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
@@ -159,7 +177,9 @@ def load_langpair_dataset(
         eos=eos,
         num_buckets=num_buckets,
         shuffle=shuffle,
-        pad_to_multiple=pad_to_multiple
+        pad_to_multiple=pad_to_multiple,
+        train_abs_mask=train_abs_mask,
+        val_abs_mask=val_abs_mask,
     )
 
 
@@ -235,6 +255,8 @@ class TranslationTask(LegacyFairseqTask):
                                  'e.g., \'{"beam": 4, "lenpen": 0.6}\'')
         parser.add_argument('--eval-bleu-print-samples', action='store_true',
                             help='print sample generations during validation')
+        parser.add_argument('--abstention-mask-dir',  type=str, default=None,
+                            help='directory contains abstention masks')
         # fmt: on
 
     def __init__(self, args, src_dict, tgt_dict):
@@ -314,6 +336,7 @@ class TranslationTask(LegacyFairseqTask):
             num_buckets=self.args.num_batch_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.args.required_seq_len_multiple,
+            abstention_mask_dir=self.args.abstention_mask_dir
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):

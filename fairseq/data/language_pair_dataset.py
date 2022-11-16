@@ -7,7 +7,6 @@ import logging
 
 import numpy as np
 import torch
-from os import path
 from fairseq.data import FairseqDataset, data_utils
 
 
@@ -219,21 +218,6 @@ class LanguagePairDataset(FairseqDataset):
             will contain a field 'tgt_lang_id' which indicates the target language
              of the samples.
     """
-    @staticmethod
-    def read_mask(mask_path):
-        assert path.exists(mask_path), "Mask file does not exist: {}".format(mask_path)
-        mask = []
-        with open(mask_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                mask.append(torch.tensor([int(i) for i in line.split()], dtype=torch.long))
-        logger.warning("Loss abstention mask loaded (size={}).".format(len(mask)))
-        return mask
-    
-    # define class variable
-    train_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/train.mask")
-    val_mask = read_mask.__func__("/home/mcao610/scratch/summarization/XSum/fairseq_files/masks/val.mask")
-
     def __init__(
         self,
         src,
@@ -255,7 +239,9 @@ class LanguagePairDataset(FairseqDataset):
         num_buckets=0,
         src_lang_id=None,
         tgt_lang_id=None,
-        pad_to_multiple=1
+        pad_to_multiple=1,
+        train_abs_mask=None,
+        val_abs_mask=None,
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -328,6 +314,9 @@ class LanguagePairDataset(FairseqDataset):
             self.buckets = None
         self.pad_to_multiple = pad_to_multiple
 
+        # abstention masks
+        self.train_mask, self.val_mask = train_abs_mask, val_abs_mask
+
     def get_batch_shapes(self):
         return self.buckets
 
@@ -371,9 +360,9 @@ class LanguagePairDataset(FairseqDataset):
             else:
                 raise Exception("Something wrong with the mask size!")
             
-            mask_item = mask[index]
-            assert tgt_item.size() == mask_item.size(), "Mask size: {}; Target size: {}".format(mask_item.size(), 
-                                                                                                tgt_item.size())
+            mask_item = torch.tensor(mask[index], dtype=torch.long)
+            assert tgt_item.size() == mask_item.size(), \
+                "Mask size: {}; Target size: {}".format(mask_item.size(), tgt_item.size())
             example['mask'] = mask_item
 
         if self.align_dataset is not None:
