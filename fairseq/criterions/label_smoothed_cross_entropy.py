@@ -13,6 +13,7 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from fairseq.dataclass import FairseqDataclass
 
+UNK_ID = 3
 
 @dataclass
 class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
@@ -29,9 +30,13 @@ class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
         metadata={"help": "Ignore first N tokens"},
     )
     sentence_avg: bool = II("optimization.sentence_avg")
+    abst_alpha: float = field(
+        default=1.0,
+        metadata={"help": "loss abstention weight"},
+    )
 
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None, alpha=1.0):
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
@@ -43,6 +48,22 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     else:
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
+    # ====== calculate abstention loss ======
+    lprob_unk = lprobs[:, UNK_ID]  # lprob_unk: [bs * tgt_length]
+    prob_unk = torch.exp(lprob_unk)  # prob_unk: [bs * tgt_length]
+    prob_unk_reduced = (1. - prob_unk)
+
+    a = prob_unk_reduced.masked_fill(mask.eq(0), 1.0).unsqueeze(-1)
+    b = (prob_unk_reduced - alpha) * torch.log(prob_unk_reduced) * mask
+    b = b.unsqueeze(-1)
+
+    # for analysis
+    # nll_loss_regularized = a * nll_loss
+    # regularizer = b
+
+    nll_loss = a * nll_loss + b
+    smooth_loss = a * smooth_loss + b
+    # =======================================
     if reduce:
         nll_loss = nll_loss.sum()
         smooth_loss = smooth_loss.sum()
@@ -62,12 +83,14 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         label_smoothing,
         ignore_prefix_size=0,
         report_accuracy=False,
+        abst_alpha=1.0,
     ):
         super().__init__(task)
         self.sentence_avg = sentence_avg
         self.eps = label_smoothing
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
+        self.alpha = abst_alpha
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -106,12 +129,23 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
 
     def compute_loss(self, model, net_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
+
+        # ========= loss abstention =========
+        mask = None
+        if sample.get('mask', None) is not None:
+            mask = sample['mask'].view(-1)
+            assert target.size() == mask.size(), "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
+        assert mask is not None
+        # ===================================
+
         loss, nll_loss = label_smoothed_nll_loss(
             lprobs,
             target,
             self.eps,
             ignore_index=self.padding_idx,
             reduce=reduce,
+            mask=mask,
+            alpha=self.alpha
         )
         return loss, nll_loss
 

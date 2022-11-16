@@ -110,6 +110,19 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
+    mask = None
+    if samples[0].get("mask", None) is not None:
+        mask = merge(
+            "mask",
+            left_pad=left_pad_target,
+            pad_to_length=pad_to_length["target"]
+            if pad_to_length is not None
+            else None,
+        )
+        mask = mask.index_select(0, sort_order)
+        # tgt_lengths = torch.LongTensor([s['mask'].numel() for s in samples]).index_select(0, sort_order)
+        # ntokens = sum(len(s['mask']) for s in samples)
+
     batch = {
         "id": id,
         "nsentences": len(samples),
@@ -124,6 +137,8 @@ def collate(
         batch["net_input"]["prev_output_tokens"] = prev_output_tokens.index_select(
             0, sort_order
         )
+    if mask is not None:
+        batch["mask"] = mask
 
     if samples[0].get("alignment", None) is not None:
         bsz, tgt_sz = batch["target"].shape
@@ -226,6 +241,8 @@ class LanguagePairDataset(FairseqDataset):
         src_lang_id=None,
         tgt_lang_id=None,
         pad_to_multiple=1,
+        train_abs_mask=None,
+        val_abs_mask=None,
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -298,6 +315,9 @@ class LanguagePairDataset(FairseqDataset):
             self.buckets = None
         self.pad_to_multiple = pad_to_multiple
 
+        # abstention masks
+        self.train_mask, self.val_mask = train_abs_mask, val_abs_mask
+
     def get_batch_shapes(self):
         return self.buckets
 
@@ -332,6 +352,21 @@ class LanguagePairDataset(FairseqDataset):
             "source": src_item,
             "target": tgt_item,
         }
+
+        if self.tgt is not None:
+            assert self.train_mask is not None and self.val_mask is not None
+            if len(self.tgt) == len(self.train_mask):
+                mask = self.train_mask
+            elif len(self.tgt) == len(self.val_mask):
+                mask = self.val_mask
+            else:
+                raise Exception("Something wrong with the mask size!")
+            
+            mask_item = torch.tensor(mask[index], dtype=torch.long)
+            assert tgt_item.size() == mask_item.size(), \
+                "Mask size: {}; Target size: {}".format(mask_item.size(), tgt_item.size())
+            example['mask'] = mask_item
+
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
         if self.constraints is not None:
