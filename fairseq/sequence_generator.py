@@ -30,6 +30,7 @@ class SequenceGenerator(nn.Module):
         normalize_scores=True,
         len_penalty=1.0,
         unk_penalty=0.0,
+        rej_penalty=0.0,
         temperature=1.0,
         match_source_len=False,
         no_repeat_ngram_size=0,
@@ -103,6 +104,7 @@ class SequenceGenerator(nn.Module):
         self.normalize_scores = normalize_scores
         self.len_penalty = len_penalty
         self.unk_penalty = unk_penalty
+        self.rej_penalty = rej_penalty
         self.temperature = temperature
         self.match_source_len = match_source_len
 
@@ -421,13 +423,14 @@ class SequenceGenerator(nn.Module):
             if self.repeat_ngram_blocker is not None:
                 lprobs = self.repeat_ngram_blocker(tokens, lprobs, bsz, beam_size, step)
 
-            # Shape: (batch, cand_size)
+            # Shape: (batch, cand_size (beam_size * 2))
             cand_scores, cand_indices, cand_beams = self.search.step(
                 step,
                 lprobs.view(bsz, -1, self.vocab_size),
                 scores.view(bsz, beam_size, -1)[:, :, :step],
                 tokens[:, : step + 1],
                 original_batch_idxs,
+                rej_lambda=self.rej_penalty,
             )
 
             # cand_bbsz_idx contains beam indices for the top candidate

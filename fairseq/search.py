@@ -113,7 +113,13 @@ class BeamSearch(Search):
         scores: Optional[Tensor],
         prev_output_tokens: Optional[Tensor] = None,
         original_batch_idxs: Optional[Tensor] = None,
-    ):
+        rej_lambda: Optional[float] = 0.0,
+    ):  
+        """
+        Args:
+            lprobs: [bsz, beam_size, vocab_size]
+            scores: [bsz, beam_size, step]
+        """
         bsz, beam_size, vocab_size = lprobs.size()
 
         if step == 0:
@@ -123,7 +129,12 @@ class BeamSearch(Search):
         else:
             # make probs contain cumulative scores for each hypothesis
             assert scores is not None
-            lprobs = lprobs + scores[:, :, step - 1].unsqueeze(-1)
+            if rej_lambda > 0:
+                rpenalty = torch.log(1 / (1 - torch.exp(lprobs[:, :, self.unk]))).unsqueeze(-1)
+                lprobs[:, :, self.unk] = -math.inf
+                lprobs = lprobs + scores[:, :, step - 1].unsqueeze(-1) - rpenalty * rej_lambda
+            else:
+                lprobs = lprobs + scores[:, :, step - 1].unsqueeze(-1)
 
         top_prediction = torch.topk(
             lprobs.view(bsz, -1),
@@ -134,8 +145,8 @@ class BeamSearch(Search):
                 lprobs.view(bsz, -1).size(1) - 1,  # -1 so we never select pad
             ),
         )
-        scores_buf = top_prediction[0]
-        indices_buf = top_prediction[1]
+        scores_buf = top_prediction[0]  # [bsz, beam_size * 2]
+        indices_buf = top_prediction[1]  # [bsz, beam_size * 2]
         # Project back into relative indices and beams
         beams_buf = torch.div(indices_buf, vocab_size, rounding_mode="trunc")
         indices_buf = indices_buf.fmod(vocab_size)

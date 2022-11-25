@@ -6,9 +6,10 @@
 import torch
 from fairseq.models.bart import BARTModel
 import argparse
+from tqdm import tqdm
 
-XSUM_KWARGS = dict(beam=6, lenpen=1.0, max_len_b=60, min_len=10, no_repeat_ngram_size=3)
-CNN_KWARGS = dict(beam=4, lenpen=2.0, max_len_b=140, min_len=55, no_repeat_ngram_size=3)
+XSUM_KWARGS = dict(max_len_b=60, min_len=10, no_repeat_ngram_size=3)
+CNN_KWARGS = dict(max_len_b=140, min_len=55, no_repeat_ngram_size=3)
 
 
 @torch.no_grad()
@@ -20,7 +21,7 @@ def generate(bart, infile, outfile="bart_hypo.txt", bsz=32, n_obs=None, **eval_k
     with open(infile) as source, open(outfile, "w") as fout:
         sline = source.readline().strip()
         slines = [sline]
-        for sline in source:
+        for sline in tqdm(source):
             if n_obs is not None and count > n_obs:
                 break
             if count % bsz == 0:
@@ -68,9 +69,15 @@ def main():
     parser.add_argument(
         "--out", default="test.hypo", help="where to save summaries", type=str
     )
-    parser.add_argument("--bsz", default=32, help="where to save summaries", type=int)
+    parser.add_argument("--beam_size", default=6, help="Number of beams for decoding", type=int)
+    parser.add_argument("--bsz", default=32, help="Batch size", type=int)
     parser.add_argument(
         "--n", default=None, help="how many examples to summarize", type=int
+    )
+    parser.add_argument("--lenpen", default=1.0, help="Length penalty", type=float)
+    parser.add_argument("--rejpen", default=0.0, help="Rejction penalty", type=float)
+    parser.add_argument(
+        "--unnormalized", action="store_true", default=False,
     )
     parser.add_argument(
         "--xsum-kwargs",
@@ -92,7 +99,16 @@ def main():
     if torch.cuda.is_available():
         bart = bart.cuda().half()
     generate(
-        bart, args.src, bsz=args.bsz, n_obs=args.n, outfile=args.out, **eval_kwargs
+        bart,
+        args.src,
+        bsz=args.bsz,
+        n_obs=args.n,
+        outfile=args.out,
+        beam=args.beam_size,
+        lenpen=args.lenpen,
+        rejpen=args.rejpen,
+        unnormalized=args.unnormalized,
+        **eval_kwargs
     )
 
 
