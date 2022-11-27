@@ -13,7 +13,6 @@ from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from fairseq.dataclass import FairseqDataclass
 
-UNK_ID = 3
 
 @dataclass
 class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
@@ -36,11 +35,30 @@ class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
     )
 
 
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None, alpha=1.0):
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True, mask=None, alpha=1.0, unk_idx=3):
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+
+    # ================== calculate rejection loss ==================
+    rej_prob = torch.exp(lprobs[:, unk_idx]).unsqueeze(-1)
+    if mask is not None:
+        mask = mask.unsqueeze(-1).eq(0)
+    else:
+        mask = torch.ones(nll_loss.size(), dtype=torch.long).to(nll_loss)
+    keep_prob = (1. - rej_prob).masked_fill(mask, 1.0)  # 0: non-entity
+    assert keep_prob.shape == nll_loss.shape, \
+        "nll_loss: {}; keep_prob: {}".format(nll_loss.shape, keep_prob.shape)    
+
+    rej_loss = keep_prob * (nll_loss + torch.log(keep_prob))
+    rej_regularizer = -alpha * torch.log(keep_prob)
+    nll_loss = rej_loss + rej_regularizer
+
+    rej_smooth_loss = keep_prob * (smooth_loss + torch.log(keep_prob))
+    smooth_loss = rej_smooth_loss + rej_regularizer
+    # ===============================================================
+
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
@@ -48,22 +66,6 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     else:
         nll_loss = nll_loss.squeeze(-1)
         smooth_loss = smooth_loss.squeeze(-1)
-    # ====== calculate abstention loss ======
-    lprob_unk = lprobs[:, UNK_ID]  # lprob_unk: [bs * tgt_length]
-    prob_unk = torch.exp(lprob_unk)  # prob_unk: [bs * tgt_length]
-    prob_unk_reduced = (1. - prob_unk)
-
-    a = prob_unk_reduced.masked_fill(mask.eq(0), 1.0).unsqueeze(-1)
-    b = (prob_unk_reduced - alpha) * torch.log(prob_unk_reduced) * mask
-    b = b.unsqueeze(-1)
-
-    # for analysis
-    # nll_loss_regularized = a * nll_loss
-    # regularizer = b
-
-    nll_loss = a * nll_loss + b
-    smooth_loss = a * smooth_loss + b
-    # =======================================
     if reduce:
         nll_loss = nll_loss.sum()
         smooth_loss = smooth_loss.sum()
@@ -91,6 +93,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.ignore_prefix_size = ignore_prefix_size
         self.report_accuracy = report_accuracy
         self.alpha = abst_alpha
+
+        if hasattr(self.task, "target_dictionary"):
+            self.unk_idx = self.task.target_dictionary.unk()
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -145,7 +150,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             ignore_index=self.padding_idx,
             reduce=reduce,
             mask=mask,
-            alpha=self.alpha
+            alpha=self.alpha,
+            unk_idx=self.unk_idx,
         )
         return loss, nll_loss
 
