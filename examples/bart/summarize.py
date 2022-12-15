@@ -64,6 +64,13 @@ def main():
         help="where in model_dir are weights saved",
     )
     parser.add_argument(
+        "--dict-dir",
+        required=True,
+        type=str,
+        default="xsum-bin/",
+        help="path containing dict.source.txt and dict.target.txt",
+    )
+    parser.add_argument(
         "--src", default="test.source", help="text to summarize", type=str
     )
     parser.add_argument(
@@ -93,7 +100,7 @@ def main():
         bart = BARTModel.from_pretrained(
             args.model_dir,
             checkpoint_file=args.model_file,
-            data_name_or_path=args.model_dir,
+            data_name_or_path=args.dict_dir,
         )
     bart = bart.eval()
     if torch.cuda.is_available():
