@@ -354,18 +354,20 @@ class LanguagePairDataset(FairseqDataset):
         }
 
         if self.tgt is not None:
-            assert self.train_mask is not None and self.val_mask is not None
-            if len(self.tgt) == len(self.train_mask):
-                mask = self.train_mask
-            elif len(self.tgt) == len(self.val_mask):
-                mask = self.val_mask
+            if self.train_mask is not None and self.val_mask is not None:
+                if len(self.tgt) == len(self.train_mask):
+                    mask = self.train_mask
+                elif len(self.tgt) == len(self.val_mask):
+                    mask = self.val_mask
+                else:
+                    raise Exception("Something wrong with the mask size!")
+                
+                mask_item = torch.tensor(mask[index], dtype=torch.long)
+                assert tgt_item.size() == mask_item.size(), \
+                    "Mask size: {}; Target size: {}".format(mask_item.size(), tgt_item.size())
+                example['mask'] = mask_item
             else:
-                raise Exception("Something wrong with the mask size!")
-            
-            mask_item = torch.tensor(mask[index], dtype=torch.long)
-            assert tgt_item.size() == mask_item.size(), \
-                "Mask size: {}; Target size: {}".format(mask_item.size(), tgt_item.size())
-            example['mask'] = mask_item
+                example['mask'] = None
 
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]

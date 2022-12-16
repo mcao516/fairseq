@@ -45,9 +45,9 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     rej_prob = torch.exp(lprobs[:, unk_idx]).unsqueeze(-1)
     if mask is not None:
         mask = mask.unsqueeze(-1).eq(0)
+        keep_prob = (1. - rej_prob).masked_fill(mask, 1.0)  # 0: non-entity
     else:
-        mask = torch.ones(nll_loss.size(), dtype=torch.long).to(nll_loss)
-    keep_prob = (1. - rej_prob).masked_fill(mask, 1.0)  # 0: non-entity
+        keep_prob = 1. - rej_prob
     assert keep_prob.shape == nll_loss.shape, \
         "nll_loss: {}; keep_prob: {}".format(nll_loss.shape, keep_prob.shape)    
 
@@ -140,7 +140,6 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         if sample.get('mask', None) is not None:
             mask = sample['mask'].view(-1)
             assert target.size() == mask.size(), "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
-        assert mask is not None
         # ===================================
 
         loss, nll_loss = label_smoothed_nll_loss(
