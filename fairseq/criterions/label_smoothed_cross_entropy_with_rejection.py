@@ -119,11 +119,11 @@ class LabelSmoothedCrossEntropyCriterionWithRejection(
     def compute_loss(self, model, net_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
 
-        # Mask that marks all entities in the sequence. If it is not None,
+        # This mask marks all entities in the summary sequence. If the mask is not None,
         # rejection loss only applies to entity tokens.
         mask = None
-        if sample.get('mask', None) is not None:
-            mask = sample['mask'].view(-1)
+        if "mask" in sample and sample["mask"] is not None:
+            mask = sample["mask"].view(-1)
             assert target.size() == mask.size(), \
                 "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
 
