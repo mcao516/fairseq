@@ -1,41 +1,56 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+# -*- coding: utf-8 -*-
+"""Implementation of rejection loss
 
+Check our paper: Learning with Rejection for Abstractive Text Summarization
+
+"""
 import math
-from dataclasses import dataclass, field
-
 import torch
-from omegaconf import II
 
 from fairseq import metrics, utils
-from fairseq.criterions import FairseqCriterion, register_criterion
-from fairseq.dataclass import FairseqDataclass
+from fairseq.criterions import register_criterion
+
+from .label_smoothed_cross_entropy import (
+    LabelSmoothedCrossEntropyCriterion,
+    LabelSmoothedCrossEntropyCriterionConfig,
+)
+
+from dataclasses import dataclass, field
 
 
-@dataclass
-class LabelSmoothedCrossEntropyCriterionConfig(FairseqDataclass):
-    label_smoothing: float = field(
-        default=0.0,
-        metadata={"help": "epsilon for label smoothing, 0 means no label smoothing"},
-    )
-    report_accuracy: bool = field(
-        default=False,
-        metadata={"help": "report accuracy metric"},
-    )
-    ignore_prefix_size: int = field(
-        default=0,
-        metadata={"help": "Ignore first N tokens"},
-    )
-    sentence_avg: bool = II("optimization.sentence_avg")
-
-
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=True):
+def label_smoothed_nll_loss_with_rejection(
+    lprobs,
+    target,
+    epsilon,
+    ignore_index=None,
+    reduce=True,
+    mask=None,
+    alpha=1.0,
+    unk_idx=3
+):
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+
+    # ================== calculate rejection loss ==================
+    rej_prob = torch.exp(lprobs[:, unk_idx]).unsqueeze(-1)
+    if mask is not None:
+        mask = mask.unsqueeze(-1).eq(0)
+        keep_prob = (1. - rej_prob).masked_fill(mask, 1.0)  # 0: non-entity
+    else:
+        keep_prob = 1. - rej_prob
+    assert keep_prob.shape == nll_loss.shape, \
+        "nll_loss: {}; keep_prob: {}".format(nll_loss.shape, keep_prob.shape)    
+
+    rej_loss = keep_prob * (nll_loss + torch.log(keep_prob))
+    rej_regularizer = -alpha * torch.log(keep_prob)
+    nll_loss = rej_loss + rej_regularizer
+
+    rej_smooth_loss = keep_prob * (smooth_loss + torch.log(keep_prob))
+    smooth_loss = rej_smooth_loss + rej_regularizer
+    # ===============================================================
+
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         nll_loss.masked_fill_(pad_mask, 0.0)
@@ -51,26 +66,33 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None, reduce=T
     return loss, nll_loss
 
 
+@dataclass
+class LabelSmoothedCrossEntropyCriterionWithRejectionConfig(
+    LabelSmoothedCrossEntropyCriterionConfig
+):
+    rejection_alpha: float = field(
+        default=1.0,
+        metadata={"help": "weight for the rejection loss regularizer"},
+    )
+
+
 @register_criterion(
-    "label_smoothed_cross_entropy", dataclass=LabelSmoothedCrossEntropyCriterionConfig
+    "label_smoothed_cross_entropy_with_rejection",
+    dataclass=LabelSmoothedCrossEntropyCriterionWithRejectionConfig,
 )
-class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
-    def __init__(
-        self,
-        task,
-        sentence_avg,
-        label_smoothing,
-        ignore_prefix_size=0,
-        report_accuracy=False,
-    ):
-        super().__init__(task)
-        self.sentence_avg = sentence_avg
-        self.eps = label_smoothing
-        self.ignore_prefix_size = ignore_prefix_size
-        self.report_accuracy = report_accuracy
+class LabelSmoothedCrossEntropyCriterionWithRejection(
+    LabelSmoothedCrossEntropyCriterion
+):
+    def __init__(self, task, sentence_avg, label_smoothing, rejection_alpha):
+        super().__init__(task, sentence_avg, label_smoothing)
+        self.rejection_alpha = rejection_alpha
+
+        if hasattr(self.task, "target_dictionary"):
+            self.unk_idx = self.task.target_dictionary.unk()
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
+
         Returns a tuple with three elements:
         1) the loss
         2) the sample size, which is used as the denominator for the gradient
@@ -94,34 +116,28 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             logging_output["total"] = utils.item(total.data)
         return loss, sample_size, logging_output
 
-    def get_lprobs_and_target(self, model, net_output, sample):
-        lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        target = model.get_targets(sample, net_output)
-        if self.ignore_prefix_size > 0:
-            # lprobs: B x T x C
-            lprobs = lprobs[:, self.ignore_prefix_size :, :].contiguous()
-            target = target[:, self.ignore_prefix_size :].contiguous()
-        return lprobs.view(-1, lprobs.size(-1)), target.view(-1)
-
     def compute_loss(self, model, net_output, sample, reduce=True):
         lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
-        loss, nll_loss = label_smoothed_nll_loss(
+
+        # Mask that marks all entities in the sequence. If it is not None,
+        # rejection loss only applies to entity tokens.
+        mask = None
+        if sample.get('mask', None) is not None:
+            mask = sample['mask'].view(-1)
+            assert target.size() == mask.size(), \
+                "Target size: {}; Mask size: {}.".format(target.size(), mask.size())
+
+        loss, nll_loss = label_smoothed_nll_loss_with_rejection(
             lprobs,
             target,
             self.eps,
             ignore_index=self.padding_idx,
             reduce=reduce,
+            mask=mask,
+            alpha=self.rejection_alpha,
+            unk_idx=self.unk_idx,
         )
         return loss, nll_loss
-
-    def compute_accuracy(self, model, net_output, sample):
-        lprobs, target = self.get_lprobs_and_target(model, net_output, sample)
-        mask = target.ne(self.padding_idx)
-        n_correct = torch.sum(
-            lprobs.argmax(1).masked_select(mask).eq(target.masked_select(mask))
-        )
-        total = torch.sum(mask)
-        return n_correct, total
 
     @classmethod
     def reduce_metrics(cls, logging_outputs) -> None:
